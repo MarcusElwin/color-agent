@@ -19,14 +19,17 @@ Most "color name → hex" requests are deterministic — `crimson` should never 
 
 ```
 query → normalize
-  ├─ Tier 1: CSS named colors dict (in-process, ~0ms)
-  ├─ Tier 2: color.pizza exact match  (~50ms, free)
-  ├─ Tier 3: color.pizza fuzzy match  (~50ms, free)
-  └─ Tier 4: LLM agent (~3-30s)
+  ├─ Tier 1:   CSS named colors dict (in-process, ~0ms)
+  ├─ Tier 2.5: local 32k color-name dict (in-process, ~50-300ms)
+  ├─ Tier 2:   color.pizza exact match  (~50ms, free, network)
+  ├─ Tier 3:   color.pizza fuzzy match  (~50ms, free, network)
+  └─ Tier 4:   LLM agent (~3-30s)
        ├─ base       (high confidence → return)
        ├─ reflect    (medium → second pass)
        └─ consistent (low / brand-y → N=5 sample medoid)
 ```
+
+The local 32k dictionary (Tier 2.5) is mirrored from [meodai/color-name-list](https://github.com/meodai/color-names) — MIT-licensed, ships with the package (~650 KB CSV). Critical because color.pizza serves HTTP 403 to many networks ("commercial-feel traffic"). When local resolves with confidence, color.pizza is **skipped entirely** (no network round-trip). Bare-hex queries (`#0047AB`) likewise use a local RGB-KNN over the same dataset.
 
 Cost shift: if 80% of queries are lookup-resolvable, you go from `1.0 × $X` to `~0.2 × $X` — ~5× cheaper than an LLM-only design at the same output quality.
 
