@@ -99,6 +99,31 @@ def _score_bar(score: float, width: int = 12) -> Text:
     return Text.assemble((bar, color), " ", (f"{score:.2f}", "dim"))
 
 
+def _trace_line_for_panel(step) -> Text:
+    """One compact line summarizing a TraceStep for the result panel.
+    Tighter than the live trace (which has the full terminal width)."""
+    if step.confident is True:
+        glyph, glyph_style = "✓", "bold green"
+    elif step.confident is False:
+        glyph, glyph_style = "?", "bold yellow"
+    else:
+        glyph, glyph_style = "·", "dim"
+    head = step.name.split(" • ", 1)[0]
+    line = Text()
+    line.append(f"{glyph} ", style=glyph_style)
+    line.append(f"{head:<14}", style=f"bold {_tier_color_for_event(step.tier)}")
+    line.append(f"{step.duration_ms:>6} ms", style="cyan")
+    line.append("  ")
+    # Prefer the concrete outcome (top hex) when we have it; fall back to text.
+    if step.top_hex:
+        line.append(step.top_hex, style="white")
+        if step.candidates is not None:
+            line.append(f" ({step.candidates}c)", style="dim")
+    else:
+        line.append(step.outcome, style="white")
+    return line
+
+
 def _render_human(result, console: Console) -> None:
     tier_color, tier_label = TIER_THEME.get(result.tier, ("white", result.tier))
     confidence_label = (
@@ -119,11 +144,19 @@ def _render_human(result, console: Console) -> None:
         meta.append("  •  spread ")
         meta.append(f"{result.spread}", style="magenta")
 
+    body = Text.assemble(header, "\n", meta)
+    if result.trace:
+        body.append("\n\n")
+        body.append("routing trace:", style="dim")
+        for step in result.trace:
+            body.append("\n  ")
+            body.append_text(_trace_line_for_panel(step))
+
     console.print(Panel(
-        Text.assemble(header, "\n", meta),
+        body,
         title=Text("colour-agent", style="bold white on blue"),
         title_align="left",
-        border_style=tier_color.split()[-1],  # plain color for the border
+        border_style=tier_color.split()[-1],
         box=ROUNDED,
     ))
 
@@ -160,6 +193,22 @@ def _render_plain(result) -> str:
         f"latency={result.latency_ms}ms"
         + (f"  spread={result.spread}" if result.spread is not None else "")
     )
+    if result.trace:
+        lines.append("")
+        lines.append("routing trace:")
+        for step in result.trace:
+            head = step.name.split(" • ", 1)[0]
+            mark = "OK" if step.confident is True else "?" if step.confident is False else "-"
+            extras = []
+            if step.candidates is not None:
+                extras.append(f"{step.candidates}c")
+            if step.top_hex:
+                extras.append(step.top_hex)
+            extra_str = f" ({', '.join(extras)})" if extras else ""
+            lines.append(
+                f"  [{mark}] {head:<22} {step.duration_ms:>5}ms  "
+                f"{step.outcome}{extra_str}"
+            )
     if not result.candidates:
         lines.append("  (no candidates)")
         return "\n".join(lines)
@@ -353,6 +402,7 @@ def cli(query: str, top_k: int, force: str | None, model: str,
             "spread": result.spread,
             "latency_ms": result.latency_ms,
             "candidates": [asdict(c) for c in result.candidates],
+            "trace": [asdict(s) for s in result.trace],
         }
         click.echo(jsonlib.dumps(payload, indent=2))
     elif no_color:

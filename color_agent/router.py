@@ -22,7 +22,7 @@ from color_agent.reflect import reflect
 from color_agent.tier1 import tier1
 from color_agent.tier23 import hex_neighbors, tier2_or_3
 from color_agent.tier_local import tier_local
-from color_agent.types import Candidate, Result
+from color_agent.types import Candidate, Result, TraceStep
 
 ForceLayer = Literal["tier1", "tier2_3", "tier4_base", "tier4_reflect", "tier4_consistent"]
 ProgressFn = Callable[[str], None]
@@ -38,21 +38,23 @@ def _noop_event(_evt: dict) -> None:
 
 
 class _Trace:
-    """Tiny helper that emits structured trace events to a callback. Each tier's
-    code path calls .step(name) on entry and .end(outcome=...) on exit so the
-    CLI can render a persistent per-tier trace."""
+    """Tiny helper that emits structured trace events AND collects them for the
+    final Result. CLI renders them live; result panel renders them post-hoc;
+    --json output ships them so callers can audit the routing path."""
 
     def __init__(self, on_event: EventFn, on_progress: ProgressFn):
         self.on_event = on_event
         self.on_progress = on_progress
         self._t0_step: float | None = None
         self._current: str | None = None
+        self._current_tier: str | None = None
+        self.steps: list[TraceStep] = []
 
     def step(self, name: str, **kw) -> None:
-        # Close any prior step that wasn't explicitly ended (safety net).
         if self._current is not None:
             self.end(outcome="(skipped)")
         self._current = name
+        self._current_tier = kw.get("tier")
         self._t0_step = time.time()
         self.on_progress(name)
         self.on_event({"type": "step_start", "name": name, **kw})
@@ -61,11 +63,21 @@ class _Trace:
         if self._current is None:
             return
         dt_ms = int((time.time() - (self._t0_step or time.time())) * 1000)
+        self.steps.append(TraceStep(
+            tier=self._current_tier or "?",
+            name=self._current,
+            outcome=outcome,
+            duration_ms=dt_ms,
+            confident=kw.get("confident"),
+            candidates=kw.get("candidates"),
+            top_hex=kw.get("top_hex"),
+        ))
         self.on_event({
             "type": "step_end", "name": self._current,
             "outcome": outcome, "duration_ms": dt_ms, **kw,
         })
         self._current = None
+        self._current_tier = None
         self._t0_step = None
 
 # Hand-tuned brand/obscure hints — escalate Tier 4 to consistency on first sight.
@@ -131,6 +143,14 @@ def to_hex(query: str, k: int = 5,
     progress = on_progress or _noop
     event = on_event or _noop_event
     trace = _Trace(event, progress)
+    result = _to_hex_inner(query, k, force, model, trace, progress)
+    result.trace = list(trace.steps)
+    return result
+
+
+def _to_hex_inner(query: str, k: int, force: ForceLayer | None,
+                   model: str, trace: "_Trace",
+                   progress: ProgressFn) -> Result:
     started = time.time()
     progress("Normalizing query")
     normalized = normalize(query)
