@@ -102,3 +102,31 @@ def test_to_candidates_uses_confidence_scores():
     assert cands[2].score == 0.7   # medium
     assert cands[4].score == 0.5   # low
     assert cands[0].hex == "#0047AB"
+
+
+def test_to_candidates_preserves_rationale():
+    """LLM rationale should make it through to the Candidate, not be dropped."""
+    cands = to_candidates(_five_candidates_payload(), k=5)
+    assert cands[0].rationale == "primary"
+    assert cands[1].rationale == "near"
+    # All five candidates from the fixture have a non-empty rationale
+    assert all(c.rationale for c in cands)
+
+
+def test_to_candidates_strips_whitespace_from_rationale():
+    payload = {
+        "candidates": [{"hex": "#0047AB", "name": "x", "confidence": "high",
+                          "rationale": "  spaces around   "}] * 5,
+        "overall_confidence": "high", "source": "knowledge",
+    }
+    cands = to_candidates(payload, k=5)
+    assert cands[0].rationale == "spaces around"
+
+
+def test_to_candidates_handles_missing_rationale():
+    payload = {
+        "candidates": [{"hex": "#0047AB", "name": "x", "confidence": "high"}] * 5,
+        "overall_confidence": "high", "source": "knowledge",
+    }
+    cands = to_candidates(payload, k=5)
+    assert cands[0].rationale is None

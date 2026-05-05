@@ -19,6 +19,23 @@ class Candidate:
     name: str
     score: float
     source: str
+    # LLM tiers populate this with the model's per-candidate justification
+    # (Tier 4 base / reflect / consistent). Other tiers leave it None.
+    rationale: str | None = None
+
+
+@dataclass
+class TraceStep:
+    """One row in the per-tier audit trail. Captures everything the live CLI
+    spinner used to show, so the trace survives in --json output and any
+    post-hoc rendering of a Result."""
+    tier: str
+    name: str                 # human label, e.g. "Tier 2.5 • local 32k name dictionary"
+    outcome: str              # "hit", "miss", "matched as local-fuzzy", error msg, ...
+    duration_ms: int
+    confident: bool | None = None
+    candidates: int | None = None
+    top_hex: str | None = None
 
 
 @dataclass
@@ -31,3 +48,4 @@ class Result:
     spread: float | None = None
     latency_ms: int = 0
     notes: list[str] = field(default_factory=list)
+    trace: list[TraceStep] = field(default_factory=list)

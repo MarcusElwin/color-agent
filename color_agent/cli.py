@@ -16,8 +16,10 @@ import time
 
 import click
 from rich.box import ROUNDED
-from rich.console import Console
+from rich.console import Console, Group
+from rich.live import Live
 from rich.panel import Panel
+from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
 
@@ -97,6 +99,31 @@ def _score_bar(score: float, width: int = 12) -> Text:
     return Text.assemble((bar, color), " ", (f"{score:.2f}", "dim"))
 
 
+def _trace_line_for_panel(step) -> Text:
+    """One compact line summarizing a TraceStep for the result panel.
+    Tighter than the live trace (which has the full terminal width)."""
+    if step.confident is True:
+        glyph, glyph_style = "✓", "bold green"
+    elif step.confident is False:
+        glyph, glyph_style = "?", "bold yellow"
+    else:
+        glyph, glyph_style = "·", "dim"
+    head = step.name.split(" • ", 1)[0]
+    line = Text()
+    line.append(f"{glyph} ", style=glyph_style)
+    line.append(f"{head:<14}", style=f"bold {_tier_color_for_event(step.tier)}")
+    line.append(f"{step.duration_ms:>6} ms", style="cyan")
+    line.append("  ")
+    # Prefer the concrete outcome (top hex) when we have it; fall back to text.
+    if step.top_hex:
+        line.append(step.top_hex, style="white")
+        if step.candidates is not None:
+            line.append(f" ({step.candidates}c)", style="dim")
+    else:
+        line.append(step.outcome, style="white")
+    return line
+
+
 def _render_human(result, console: Console) -> None:
     tier_color, tier_label = TIER_THEME.get(result.tier, ("white", result.tier))
     confidence_label = (
@@ -117,17 +144,27 @@ def _render_human(result, console: Console) -> None:
         meta.append("  •  spread ")
         meta.append(f"{result.spread}", style="magenta")
 
+    body = Text.assemble(header, "\n", meta)
+    if result.trace:
+        body.append("\n\n")
+        body.append("routing trace:", style="dim")
+        for step in result.trace:
+            body.append("\n  ")
+            body.append_text(_trace_line_for_panel(step))
+
     console.print(Panel(
-        Text.assemble(header, "\n", meta),
+        body,
         title=Text("colour-agent", style="bold white on blue"),
         title_align="left",
-        border_style=tier_color.split()[-1],  # plain color for the border
+        border_style=tier_color.split()[-1],
         box=ROUNDED,
     ))
 
     if not result.candidates:
         console.print("[red](no candidates)[/red]")
         return
+
+    has_rationale = any(c.rationale for c in result.candidates)
 
     table = Table(box=ROUNDED, show_lines=False, expand=False,
                   border_style="grey50", header_style="bold white on grey23")
@@ -136,16 +173,22 @@ def _render_human(result, console: Console) -> None:
     table.add_column("score", no_wrap=True)
     table.add_column("name", overflow="fold", max_width=32)
     table.add_column("source", style="dim")
+    if has_rationale:
+        table.add_column("reasoning", overflow="fold", max_width=48,
+                          style="italic")
 
     for i, c in enumerate(result.candidates, 1):
         rank_style = "bold white on green" if i == 1 else "white"
-        table.add_row(
+        row = [
             Text(str(i), style=rank_style),
             _swatch_text(c.hex),
             _score_bar(c.score),
             c.name or "—",
             c.source,
-        )
+        ]
+        if has_rationale:
+            row.append(c.rationale or "—")
+        table.add_row(*row)
 
     console.print(table)
 
@@ -158,6 +201,22 @@ def _render_plain(result) -> str:
         f"latency={result.latency_ms}ms"
         + (f"  spread={result.spread}" if result.spread is not None else "")
     )
+    if result.trace:
+        lines.append("")
+        lines.append("routing trace:")
+        for step in result.trace:
+            head = step.name.split(" • ", 1)[0]
+            mark = "OK" if step.confident is True else "?" if step.confident is False else "-"
+            extras = []
+            if step.candidates is not None:
+                extras.append(f"{step.candidates}c")
+            if step.top_hex:
+                extras.append(step.top_hex)
+            extra_str = f" ({', '.join(extras)})" if extras else ""
+            lines.append(
+                f"  [{mark}] {head:<22} {step.duration_ms:>5}ms  "
+                f"{step.outcome}{extra_str}"
+            )
     if not result.candidates:
         lines.append("  (no candidates)")
         return "\n".join(lines)
@@ -169,40 +228,133 @@ def _render_plain(result) -> str:
         lines.append(
             f"  {i:<2} {c.hex:<8} {c.score:<6.3f} {c.name[:30]:<30} {c.source}"
         )
+        if c.rationale:
+            lines.append(f"     ↳ {c.rationale}")
     return "\n".join(lines)
 
 
-class _LiveSpinner:
-    """Rich Status spinner that re-renders every ~120ms so the elapsed counter
-    keeps ticking while we're blocked on a single long call (LLM step)."""
+def _tier_color_for_event(tier: str | None) -> str:
+    if not tier:
+        return "white"
+    # Match the post-result panel colors so the trace and result line up.
+    return {
+        "1": "green", "local": "green",
+        "2_3": "cyan", "hex": "blue",
+        "4-base": "magenta", "4-reflect": "magenta", "4-consistent": "magenta",
+    }.get(tier, "white")
+
+
+class _TierTrace:
+    """Renders a persistent per-tier trace plus a live spinner for the active
+    step. Backwards-compatible: works as the on_progress callback (string only)
+    AND consumes structured on_event(dict) calls. Each step appears once and
+    stays visible after finalization, so the user sees the full path the
+    router took even after the run completes.
+
+    Layout (Rich Live + Group):
+      ✓ Tier 1            miss                           0 ms
+      ✓ Tier 2.5          local-fuzzy · #28589C · 5     290 ms
+      ⠋ Tier 4 base       running …                    (12.4s)
+    """
 
     def __init__(self, console: Console):
         self.console = console
-        self.phase = "Starting"
-        self.t0 = time.monotonic()
-        self._status = console.status(self._render(), spinner="dots")
+        self._completed: list[Text] = []
+        self._active_label: str | None = None
+        self._active_tier: str | None = None
+        self._active_t0: float | None = None
+        self._spinner = Spinner("dots", text=Text(""))
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._live = Live(self._render(), console=console, refresh_per_second=8,
+                           transient=False)
 
-    def _render(self) -> Text:
-        elapsed = time.monotonic() - self.t0
-        return Text.assemble(
-            (self.phase, "bold cyan"),
-            "  ",
-            (f"({elapsed:5.1f}s)", "dim"),
-        )
+    # --- callbacks consumed by the router ---------------------------------
+
+    def on_progress(self, phase: str) -> None:
+        # Compatibility hook for the (string-only) ProgressFn; kept so the
+        # existing spinner phrase still updates if no structured event arrives.
+        if self._active_label is None:
+            self._active_label = phase
+            self._active_t0 = time.monotonic()
+
+    def on_event(self, evt: dict) -> None:
+        kind = evt.get("type")
+        if kind == "step_start":
+            self._active_label = evt.get("name", "running")
+            self._active_tier = evt.get("tier")
+            self._active_t0 = time.monotonic()
+        elif kind == "step_end":
+            self._finalize_step(evt)
+
+    # --- internals --------------------------------------------------------
+
+    def _finalize_step(self, evt: dict) -> None:
+        name = evt.get("name", self._active_label or "step")
+        tier = evt.get("tier") or self._active_tier
+        outcome = evt.get("outcome", "done")
+        dt_ms = evt.get("duration_ms", 0)
+        confident = evt.get("confident")
+        cands = evt.get("candidates")
+        top_hex = evt.get("top_hex")
+
+        tier_style = _tier_color_for_event(tier)
+        line = Text()
+        if confident is True:
+            line.append("✓ ", style="bold green")
+        elif confident is False:
+            line.append("? ", style="bold yellow")
+        else:
+            line.append("· ", style="dim")
+        head = name.split(" • ", 1)[0]
+        line.append(f"{head:<22}", style=f"bold {tier_style}")
+        line.append(f"  {dt_ms:>5} ms", style="cyan")
+        line.append("  ")
+        line.append(outcome, style="white")
+        details = []
+        if cands is not None:
+            details.append(f"{cands} cand")
+        if top_hex:
+            details.append(top_hex)
+        if details:
+            line.append(f"  ({' · '.join(details)})", style="dim")
+
+        self._completed.append(line)
+        self._active_label = None
+        self._active_tier = None
+        self._active_t0 = None
+        self._live.update(self._render())
+
+    def _active_line(self) -> Text | None:
+        if self._active_label is None:
+            return None
+        elapsed = time.monotonic() - (self._active_t0 or time.monotonic())
+        head = self._active_label.split(" • ", 1)[0]
+        rest = self._active_label[len(head):]
+        prefix = Text(" ")
+        prefix.append(f"{head:<22}", style="bold cyan")
+        prefix.append(f"  ({elapsed:4.1f}s)", style="dim")
+        prefix.append("  ")
+        prefix.append(rest.lstrip(" •"), style="dim")
+        self._spinner.update(text=prefix)
+        return self._spinner
+
+    def _render(self) -> Group:
+        items: list = list(self._completed)
+        active = self._active_line()
+        if active is not None:
+            items.append(active)
+        if not items:
+            items.append(Text("  starting…", style="dim"))
+        return Group(*items)
 
     def _ticker(self) -> None:
         while not self._stop.is_set():
-            self._status.update(self._render())
+            self._live.update(self._render())
             self._stop.wait(0.12)
 
-    def update(self, phase: str) -> None:
-        self.phase = phase
-        self._status.update(self._render())
-
-    def __enter__(self) -> "_LiveSpinner":
-        self._status.__enter__()
+    def __enter__(self) -> "_TierTrace":
+        self._live.__enter__()
         self._thread = threading.Thread(target=self._ticker, daemon=True)
         self._thread.start()
         return self
@@ -211,7 +363,9 @@ class _LiveSpinner:
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=0.5)
-        self._status.__exit__(*exc)
+        # One final render so the last completed step sticks.
+        self._live.update(self._render())
+        self._live.__exit__(*exc)
 
 
 @click.command(cls=_BannerCommand,
@@ -241,9 +395,11 @@ def cli(query: str, top_k: int, force: str | None, model: str,
 
     if show_spinner:
         console = Console()
-        with _LiveSpinner(console) as spin:
+        with _TierTrace(console) as trace:
             result = to_hex(query, k=top_k, force=force, model=model,
-                             on_progress=spin.update)
+                             on_progress=trace.on_progress,
+                             on_event=trace.on_event)
+        console.print()  # blank line between trace and result panel
     else:
         result = to_hex(query, k=top_k, force=force, model=model)
 
@@ -256,6 +412,7 @@ def cli(query: str, top_k: int, force: str | None, model: str,
             "spread": result.spread,
             "latency_ms": result.latency_ms,
             "candidates": [asdict(c) for c in result.candidates],
+            "trace": [asdict(s) for s in result.trace],
         }
         click.echo(jsonlib.dumps(payload, indent=2))
     elif no_color:

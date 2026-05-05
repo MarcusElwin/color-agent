@@ -49,18 +49,21 @@ def consistent(query: str, n: int = DEFAULT_N,
     # Pick the sample whose top is the medoid (any of them if duplicated).
     winner = next(p for p in payloads if p["candidates"][0]["hex"].upper() == medoid_hex)
 
+    def _rat(c: dict) -> str | None:
+        r = c.get("rationale")
+        return r.strip() if isinstance(r, str) else None
+
     out: list[Candidate] = []
     seen: set[str] = set()
-    # First: the medoid winner with spread-derived score.
     out.append(Candidate(
         hex=medoid_hex,
         name=winner["candidates"][0].get("name", ""),
         score=round(spread_similarity, 4),
         source="llm_consistent",
+        rationale=_rat(winner["candidates"][0]),
     ))
     seen.add(medoid_hex)
 
-    # Then: nearest top-picks from other samples (rank by distance to medoid).
     others = [p["candidates"][0] for p in payloads
               if p["candidates"][0]["hex"].upper() != medoid_hex]
     others.sort(key=lambda c: rgb_distance(medoid_hex, c["hex"].upper()))
@@ -72,12 +75,12 @@ def consistent(query: str, n: int = DEFAULT_N,
             hex=h, name=c.get("name", ""),
             score=round(CONFIDENCE_TO_SCORE.get(c.get("confidence", "medium"), 0.7), 4),
             source="llm_consistent",
+            rationale=_rat(c),
         ))
         seen.add(h)
         if len(out) >= k:
             break
 
-    # Pad from the winner's own remaining candidates if we're still short.
     for c in winner["candidates"][1:]:
         if len(out) >= k:
             break
@@ -88,6 +91,7 @@ def consistent(query: str, n: int = DEFAULT_N,
             hex=h, name=c.get("name", ""),
             score=round(CONFIDENCE_TO_SCORE.get(c.get("confidence", "medium"), 0.7), 4),
             source="llm_consistent",
+            rationale=_rat(c),
         ))
         seen.add(h)
 

@@ -19,14 +19,17 @@ Most "color name → hex" requests are deterministic — `crimson` should never 
 
 ```
 query → normalize
-  ├─ Tier 1: CSS named colors dict (in-process, ~0ms)
-  ├─ Tier 2: color.pizza exact match  (~50ms, free)
-  ├─ Tier 3: color.pizza fuzzy match  (~50ms, free)
-  └─ Tier 4: LLM agent (~3-30s)
+  ├─ Tier 1:   CSS named colors dict (in-process, ~0ms)
+  ├─ Tier 2.5: local 32k color-name dict (in-process, ~50-300ms)
+  ├─ Tier 2:   color.pizza exact match  (~50ms, free, network)
+  ├─ Tier 3:   color.pizza fuzzy match  (~50ms, free, network)
+  └─ Tier 4:   LLM agent (~3-30s)
        ├─ base       (high confidence → return)
        ├─ reflect    (medium → second pass)
        └─ consistent (low / brand-y → N=5 sample medoid)
 ```
+
+The local 32k dictionary (Tier 2.5) is mirrored from [meodai/color-name-list](https://github.com/meodai/color-names) — MIT-licensed, ships with the package, ~650 KB. Critical because color.pizza's free public API rate-limits or 403s commercial-feel traffic, which used to push every "cobalt blue" / "burnt sienna" query to the LLM (~30 seconds).
 
 Cost shift: if 80% of queries are lookup-resolvable, you go from `1.0 × $X` to `~0.2 × $X` — ~5× cheaper than an LLM-only design at the same output quality.
 
@@ -292,7 +295,7 @@ pytest -m live               # live tests (needs ANTHROPIC_API_KEY)
 
 ## TODO / known issues
 
-- [ ] **Routing accuracy is at 57%** on the current dataset (target ≥95%). Three `lookup_resolvable` queries are escaping to Tier 4 because color.pizza returned errors and the router fails open to the LLM. Fix candidates: distinguish `404 / empty` from `5xx / 403` so we only escalate on actual missing-data, retry once with backoff, and lower the Tier 3 fuzzy threshold from 0.85 → ~0.7 for `standard`-tier queries.
+- [x] **Routing accuracy fix** ([PR](https://github.com/MarcusElwin/color-agent/pulls?q=is%3Apr+routing-accuracy)): typed `ColorPizzaTransientError` / `ColorPizzaPermanentError`, retry-with-backoff for 403/429/5xx, fuzzy floor lowered from 0.85 → 0.65, RGB-cluster-tightness rescues mid-similarity matches that converge on a single hex, transient errors now downgrade `confident=False` instead of silently masking. Re-run `color-agent-eval` to see the new routing accuracy.
 - [ ] Grow the eval dataset: more multilingual cases (currently 1/13), disambiguation pairs ("the green Stripe used in 2023" vs current), bare-hex inputs (`#0047AB`), and intentional negative cases (`xyzzy`).
 - [ ] Cache the Tier 4 LLM responses too — repeat queries shouldn't pay the 25-second cost twice.
 - [ ] Add a `--top-k` aware Tier 4 prompt so the model can return fewer candidates when the user explicitly asked for fewer.

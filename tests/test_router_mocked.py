@@ -1,7 +1,9 @@
 from unittest.mock import patch
 
-from color_agent.types import Candidate
+import pytest
+
 from color_agent.router import to_hex
+from color_agent.types import Candidate
 
 
 def _stub_candidates(hex_, source, n=5):
@@ -39,7 +41,8 @@ def test_punctuation_normalized_before_tier1():
 
 
 def test_tier1_miss_falls_through_to_color_pizza():
-    with patch("color_agent.router.tier2_or_3") as t23, \
+    with patch("color_agent.router.tier_local", return_value=None), \
+         patch("color_agent.router.tier2_or_3") as t23, \
          patch("color_agent.router.call_agent") as agent:
         t23.return_value = (_stub_candidates("#0047AB", "color_pizza_exact"),
                              "2", True)
@@ -49,8 +52,40 @@ def test_tier1_miss_falls_through_to_color_pizza():
         assert not agent.called
 
 
+def test_tier_local_confident_skips_color_pizza():
+    """The whole point of Tier 2.5: don't pay color.pizza network if local resolves."""
+    with patch("color_agent.router.tier_local") as tlocal, \
+         patch("color_agent.router.tier2_or_3") as t23, \
+         patch("color_agent.router.call_agent") as agent:
+        tlocal.return_value = (
+            _stub_candidates("#0047AB", "local-fuzzy"), "local-fuzzy", True,
+        )
+        result = to_hex("cobalt blue")
+        assert result.tier == "local-fuzzy"
+        assert tlocal.called
+        assert not t23.called
+        assert not agent.called
+
+
+def test_tier_local_unconfident_holds_as_fallback_when_color_pizza_fails():
+    """If local has a non-confident match AND color.pizza is unreachable,
+    return the local match instead of paying ~30s for the LLM."""
+    from color_agent.color_pizza import ColorPizzaTransientError
+    with patch("color_agent.router.tier_local") as tlocal, \
+         patch("color_agent.router.tier2_or_3",
+                 side_effect=ColorPizzaTransientError("403")), \
+         patch("color_agent.router.call_agent") as agent:
+        tlocal.return_value = (
+            _stub_candidates("#0047AB", "local-fuzzy"), "local-fuzzy", False,
+        )
+        result = to_hex("some color")
+        assert result.tier == "local-fuzzy"
+        assert not agent.called  # NEVER pay LLM when local has a fallback
+
+
 def test_color_pizza_exact_returns_confident():
-    with patch("color_agent.router.tier2_or_3") as t23:
+    with patch("color_agent.router.tier_local", return_value=None), \
+         patch("color_agent.router.tier2_or_3") as t23:
         t23.return_value = (_stub_candidates("#0047AB", "color_pizza_exact"),
                              "2", True)
         result = to_hex("cobalt blue")
@@ -60,7 +95,8 @@ def test_color_pizza_exact_returns_confident():
 
 def test_color_pizza_low_confidence_fuzzy_escalates_to_llm():
     """Tier 3 with confident=False should kick to Tier 4."""
-    with patch("color_agent.router.tier2_or_3") as t23, \
+    with patch("color_agent.router.tier_local", return_value=None), \
+         patch("color_agent.router.tier2_or_3") as t23, \
          patch("color_agent.router._tier4") as tier4:
         t23.return_value = (_stub_candidates("#888888", "color_pizza_fuzzy"),
                              "3", False)
@@ -73,7 +109,8 @@ def test_color_pizza_low_confidence_fuzzy_escalates_to_llm():
 
 
 def test_complete_miss_routes_to_llm():
-    with patch("color_agent.router.tier2_or_3") as t23, \
+    with patch("color_agent.router.tier_local", return_value=None), \
+         patch("color_agent.router.tier2_or_3") as t23, \
          patch("color_agent.router._tier4") as tier4:
         t23.return_value = None
         tier4.return_value = (
@@ -85,7 +122,8 @@ def test_complete_miss_routes_to_llm():
 
 
 def test_brand_query_skips_to_consistency_inside_tier4():
-    with patch("color_agent.router.tier2_or_3") as t23, \
+    with patch("color_agent.router.tier_local", return_value=None), \
+         patch("color_agent.router.tier2_or_3") as t23, \
          patch("color_agent.router.consistent") as cons:
         t23.return_value = None
         cons.return_value = (_stub_candidates("#0ABAB5", "llm_consistent"), 8.0)
@@ -96,7 +134,8 @@ def test_brand_query_skips_to_consistency_inside_tier4():
 
 
 def test_tier4_high_confidence_returns_base_only():
-    with patch("color_agent.router.tier2_or_3") as t23, \
+    with patch("color_agent.router.tier_local", return_value=None), \
+         patch("color_agent.router.tier2_or_3") as t23, \
          patch("color_agent.router.call_agent") as agent, \
          patch("color_agent.router.reflect") as refl, \
          patch("color_agent.router.consistent") as cons:
@@ -113,7 +152,8 @@ def test_tier4_high_confidence_returns_base_only():
 
 
 def test_tier4_medium_routes_to_reflect():
-    with patch("color_agent.router.tier2_or_3") as t23, \
+    with patch("color_agent.router.tier_local", return_value=None), \
+         patch("color_agent.router.tier2_or_3") as t23, \
          patch("color_agent.router.call_agent") as agent, \
          patch("color_agent.router.reflect") as refl:
         t23.return_value = None
@@ -133,7 +173,8 @@ def test_tier4_medium_routes_to_reflect():
 
 
 def test_tier4_low_routes_to_consistency():
-    with patch("color_agent.router.tier2_or_3") as t23, \
+    with patch("color_agent.router.tier_local", return_value=None), \
+         patch("color_agent.router.tier2_or_3") as t23, \
          patch("color_agent.router.call_agent") as agent, \
          patch("color_agent.router.consistent") as cons:
         t23.return_value = None
@@ -188,8 +229,12 @@ def test_progress_callback_emits_tier4_phase_on_brand():
     assert "tier 4 consistency" in joined
 
 
-def test_color_pizza_failure_falls_through_to_llm():
-    with patch("color_agent.router.tier2_or_3", side_effect=Exception("boom")), \
+def test_color_pizza_transient_failure_escalates_but_marks_unconfident():
+    """Transient errors + no local fallback → LLM with confident=False."""
+    from color_agent.color_pizza import ColorPizzaTransientError
+    with patch("color_agent.router.tier_local", return_value=None), \
+         patch("color_agent.router.tier2_or_3",
+                 side_effect=ColorPizzaTransientError("network blip")), \
          patch("color_agent.router._tier4") as tier4:
         tier4.return_value = (
             _stub_candidates("#0047AB", "llm_knowledge"), "4-base", True, None,
@@ -197,3 +242,28 @@ def test_color_pizza_failure_falls_through_to_llm():
         result = to_hex("some unknown shade")
         assert tier4.called
         assert result.tier == "4-base"
+        assert result.confident is False  # was True from _tier4, downgraded
+
+
+def test_color_pizza_permanent_failure_also_escalates():
+    """Permanent (4xx) errors + no local fallback: LLM only."""
+    from color_agent.color_pizza import ColorPizzaPermanentError
+    with patch("color_agent.router.tier_local", return_value=None), \
+         patch("color_agent.router.tier2_or_3",
+                 side_effect=ColorPizzaPermanentError("bad request")), \
+         patch("color_agent.router._tier4") as tier4:
+        tier4.return_value = (
+            _stub_candidates("#0047AB", "llm_knowledge"), "4-base", True, None,
+        )
+        result = to_hex("some unknown shade")
+        assert tier4.called
+        assert result.confident is False
+
+
+def test_unknown_exception_propagates():
+    """Plain Exceptions from tier2_or_3 are NOT caught silently anymore —
+    those are bugs in our code, surface them."""
+    with patch("color_agent.router.tier_local", return_value=None), \
+         patch("color_agent.router.tier2_or_3", side_effect=Exception("boom")):
+        with pytest.raises(Exception, match="boom"):
+            to_hex("some unknown shade")
