@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "color-agent"
+version = "0.1.0"
+description = "Tiered natural-language color → hex agent: dictionary lookups + color.pizza + LLM fallback with self-reflection and self-consistency."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+authors = [{ name = "Marcus Elwin" }]
+keywords = ["color", "hex", "llm", "anthropic", "claude", "agent", "cli"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Graphics",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "anthropic>=0.40.0",
+    "requests>=2.31.0",
+    "click>=8.1.0",
+    "rich>=13.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-mock>=3.12.0",
+]
+
+[project.scripts]
+color-agent = "color_agent.cli:cli"
+color-agent-eval = "color_agent.cli:eval_cli"
+
+[project.urls]
+Homepage = "https://github.com/MarcusElwin/color-agent"
+Repository = "https://github.com/MarcusElwin/color-agent"
+Issues = "https://github.com/MarcusElwin/color-agent/issues"
+Changelog = "https://github.com/MarcusElwin/color-agent/blob/main/CHANGELOG.md"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["color_agent*"]

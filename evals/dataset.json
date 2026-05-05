@@ -1,0 +1,15 @@
+[
+  {"q": "crimson",            "expected": "#DC143C", "tol":  5, "category": "css_named",        "split": "lookup_resolvable"},
+  {"q": "rebeccapurple",      "expected": "#663399", "tol":  5, "category": "css_named",        "split": "lookup_resolvable"},
+  {"q": "cornflowerblue",     "expected": "#6495ED", "tol":  5, "category": "css_named",        "split": "lookup_resolvable"},
+  {"q": "grey",               "expected": "#808080", "tol":  5, "category": "css_named",        "split": "lookup_resolvable"},
+  {"q": "Cobalt-Blue!",       "expected": "#0047AB", "tol": 40, "category": "standard",         "split": "lookup_resolvable"},
+  {"q": "burnt sienna",       "expected": "#E97451", "tol": 60, "category": "standard",         "split": "lookup_resolvable"},
+  {"q": "salmon pink",        "expected": "#FF91A4", "tol": 60, "category": "standard",         "split": "lookup_resolvable"},
+  {"q": "International Klein Blue", "expected": "#002FA7", "tol": 40, "category": "brand",      "split": "llm_required"},
+  {"q": "Hermès orange",      "expected": "#FF7900", "tol": 60, "category": "brand",            "split": "llm_required"},
+  {"q": "Tiffany blue",       "expected": "#0ABAB5", "tol": 60, "category": "brand",            "split": "llm_required"},
+  {"q": "the color of a flamingo at sunset", "expected": "#FC8EAC", "tol": 80, "category": "descriptive", "split": "llm_required"},
+  {"q": "muted forest green", "expected": "#4F7942", "tol": 80, "category": "descriptive",      "split": "llm_required"},
+  {"q": "rött koppar",        "expected": "#B87333", "tol": 80, "category": "multilingual",     "split": "llm_required"}
+]
