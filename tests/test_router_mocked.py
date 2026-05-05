@@ -1,7 +1,9 @@
 from unittest.mock import patch
 
-from color_agent.types import Candidate
+import pytest
+
 from color_agent.router import to_hex
+from color_agent.types import Candidate
 
 
 def _stub_candidates(hex_, source, n=5):
@@ -188,8 +190,12 @@ def test_progress_callback_emits_tier4_phase_on_brand():
     assert "tier 4 consistency" in joined
 
 
-def test_color_pizza_failure_falls_through_to_llm():
-    with patch("color_agent.router.tier2_or_3", side_effect=Exception("boom")), \
+def test_color_pizza_transient_failure_escalates_but_marks_unconfident():
+    """Transient errors (network blip, 403, 5xx) escalate to LLM, but we set
+    confident=False so callers know we couldn't verify against color.pizza."""
+    from color_agent.color_pizza import ColorPizzaTransientError
+    with patch("color_agent.router.tier2_or_3",
+                 side_effect=ColorPizzaTransientError("network blip")), \
          patch("color_agent.router._tier4") as tier4:
         tier4.return_value = (
             _stub_candidates("#0047AB", "llm_knowledge"), "4-base", True, None,
@@ -197,3 +203,26 @@ def test_color_pizza_failure_falls_through_to_llm():
         result = to_hex("some unknown shade")
         assert tier4.called
         assert result.tier == "4-base"
+        assert result.confident is False  # was True from _tier4, downgraded
+
+
+def test_color_pizza_permanent_failure_also_escalates():
+    """Permanent (4xx) errors: nothing useful from color.pizza ever; LLM only."""
+    from color_agent.color_pizza import ColorPizzaPermanentError
+    with patch("color_agent.router.tier2_or_3",
+                 side_effect=ColorPizzaPermanentError("bad request")), \
+         patch("color_agent.router._tier4") as tier4:
+        tier4.return_value = (
+            _stub_candidates("#0047AB", "llm_knowledge"), "4-base", True, None,
+        )
+        result = to_hex("some unknown shade")
+        assert tier4.called
+        assert result.confident is False
+
+
+def test_unknown_exception_propagates():
+    """Plain Exceptions from tier2_or_3 are NOT caught silently anymore —
+    those are bugs in our code, surface them."""
+    with patch("color_agent.router.tier2_or_3", side_effect=Exception("boom")):
+        with pytest.raises(Exception, match="boom"):
+            to_hex("some unknown shade")

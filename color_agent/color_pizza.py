@@ -31,6 +31,21 @@ TTL_SECONDS = 30 * 24 * 3600  # 30 days
 HTTP_TIMEOUT = 5.0
 HEADERS = {"X-Referrer": "color-agent", "Accept-Encoding": "gzip"}
 
+# Retry settings: small budget for transient blips (403 from some networks,
+# brief 5xx, connection errors) without making the user wait too long.
+RETRY_ATTEMPTS = 2
+RETRY_BACKOFF = 0.4  # seconds — doubles each attempt
+
+
+class ColorPizzaTransientError(Exception):
+    """Network or 5xx error that may succeed on retry. Caller (router) should
+    fall through cautiously — don't escalate to LLM unless the query is truly
+    something the dictionaries couldn't have known."""
+
+
+class ColorPizzaPermanentError(Exception):
+    """4xx (other than 403/429), parse failure, or other terminal condition."""
+
 _DEFAULT_CACHE = Path(__file__).resolve().parent.parent / "data" / "cache.sqlite"
 
 
@@ -59,6 +74,40 @@ class ColorPizzaClient:
         self.db_path = db_path or _DEFAULT_CACHE
         self.session = session or requests.Session()
 
+    def _request_with_retry(self, url: str, params: dict) -> dict[str, Any]:
+        """GET with exponential backoff on transient failures. Raises a
+        typed exception (Transient vs Permanent) so the router can decide
+        whether escalating to Tier 4 is justified."""
+        last_exc: Exception | None = None
+        for attempt in range(RETRY_ATTEMPTS + 1):
+            try:
+                resp = self.session.get(
+                    url, params=params, headers=HEADERS, timeout=HTTP_TIMEOUT,
+                )
+            except requests.RequestException as e:
+                # Connection errors, timeouts → transient, retry.
+                last_exc = e
+            else:
+                if resp.status_code < 400:
+                    try:
+                        return resp.json()
+                    except ValueError as e:
+                        raise ColorPizzaPermanentError(
+                            f"invalid JSON from {url}") from e
+                # Treat 403, 408, 425, 429, 5xx as transient.
+                if resp.status_code in (403, 408, 425, 429) or resp.status_code >= 500:
+                    last_exc = requests.HTTPError(
+                        f"{resp.status_code} {resp.reason}", response=resp)
+                else:
+                    # 4xx other than the above → permanent (bad query etc).
+                    raise ColorPizzaPermanentError(
+                        f"{resp.status_code} {resp.reason} from {url}")
+            if attempt < RETRY_ATTEMPTS:
+                time.sleep(RETRY_BACKOFF * (2 ** attempt))
+        raise ColorPizzaTransientError(
+            f"giving up after {RETRY_ATTEMPTS + 1} attempts: {last_exc}"
+        ) from last_exc
+
     def _cache_get(self, table: str, key: str) -> dict[str, Any] | None:
         with _open(self.db_path) as conn:
             row = conn.execute(
@@ -86,13 +135,10 @@ class ColorPizzaClient:
         cached = self._cache_get("name_search", key)
         if cached is not None:
             return cached
-        resp = self.session.get(
+        data = self._request_with_retry(
             f"{BASE_URL}/names/",
-            params={"name": query, "list": list_, "maxResults": max_results},
-            headers=HEADERS, timeout=HTTP_TIMEOUT,
+            {"name": query, "list": list_, "maxResults": max_results},
         )
-        resp.raise_for_status()
-        data = resp.json()
         self._cache_put("name_search", key, data)
         return data
 
@@ -103,16 +149,13 @@ class ColorPizzaClient:
         cached = self._cache_get("hex_lookup", key)
         if cached is not None:
             return cached
-        resp = self.session.get(
+        data = self._request_with_retry(
             f"{BASE_URL}/",
-            params={
+            {
                 "values": clean, "list": list_,
                 "noduplicates": "true" if noduplicates else "false",
             },
-            headers=HEADERS, timeout=HTTP_TIMEOUT,
         )
-        resp.raise_for_status()
-        data = resp.json()
         self._cache_put("hex_lookup", key, data)
         return data
 

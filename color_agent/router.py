@@ -13,6 +13,9 @@ import time
 from typing import Callable, Literal
 
 from color_agent.agent import call_agent, to_candidates
+from color_agent.color_pizza import (
+    ColorPizzaPermanentError, ColorPizzaTransientError,
+)
 from color_agent.consistency import consistent
 from color_agent.normalize import normalize, parse_hex
 from color_agent.reflect import reflect
@@ -132,10 +135,21 @@ def to_hex(query: str, k: int = 5,
                        latency_ms=int((time.time() - started) * 1000))
 
     progress("Tier 2/3 • color.pizza name search")
+    t23: tuple[list[Candidate], str, bool] | None = None
+    color_pizza_failed = False  # transient error → ambiguous, may still escalate
     try:
         t23 = tier2_or_3(normalized, k=k)
-    except Exception:
-        t23 = None
+    except ColorPizzaTransientError:
+        # Network blip, 403, 5xx — already retried. Cannot tell whether color.pizza
+        # would have known. Escalate to LLM (cautiously) since this is the same
+        # behavior as before and the user is waiting.
+        color_pizza_failed = True
+        progress("Tier 2/3 • color.pizza unreachable — escalating to LLM")
+    except ColorPizzaPermanentError:
+        # 4xx (other than transient codes) or parse failure. Treat as a
+        # genuine miss rather than retrying; the LLM is our only fallback.
+        color_pizza_failed = True
+        progress("Tier 2/3 • color.pizza permanent error — escalating to LLM")
 
     if t23:
         cands, tier, confident = t23
@@ -151,7 +165,12 @@ def to_hex(query: str, k: int = 5,
         return Result(query, normalized, cands, confident, tier,
                        latency_ms=int((time.time() - started) * 1000))
 
+    # No tier-2/3 result. Two cases:
+    #   A. color.pizza answered "no match" → genuine miss; LLM is the only option.
+    #   B. color.pizza failed → can't tell; escalate, but don't pretend it's confident.
     cands4, t4, conf4, spread = _tier4(query, model=model, k=k,
                                         on_progress=progress)
+    if color_pizza_failed:
+        conf4 = False  # downstream callers should treat this as best-effort
     return Result(query, normalized, cands4, conf4, t4, spread=spread,
                    latency_ms=int((time.time() - started) * 1000))
