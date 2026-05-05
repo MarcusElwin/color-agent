@@ -52,3 +52,6 @@ Changelog = "https://github.com/MarcusElwin/color-agent/blob/main/CHANGELOG.md"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["color_agent*"]
+
+[tool.setuptools.package-data]
+color_agent = ["_colornames.csv"]

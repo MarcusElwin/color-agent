@@ -21,6 +21,7 @@ from color_agent.normalize import normalize, parse_hex
 from color_agent.reflect import reflect
 from color_agent.tier1 import tier1
 from color_agent.tier23 import hex_neighbors, tier2_or_3
+from color_agent.tier_local import tier_local
 from color_agent.types import Candidate, Result
 
 ForceLayer = Literal["tier1", "tier2_3", "tier4_base", "tier4_reflect", "tier4_consistent"]
@@ -134,6 +135,19 @@ def to_hex(query: str, k: int = 5,
         return Result(query, normalized, t1, True, "1",
                        latency_ms=int((time.time() - started) * 1000))
 
+    progress("Tier 2.5 • local 32k name dictionary")
+    tlocal = tier_local(normalized, k=k)
+    if tlocal:
+        cands, tier, confident = tlocal
+        if confident:
+            return Result(query, normalized, cands, True, tier,
+                           latency_ms=int((time.time() - started) * 1000))
+        # Hold the local fuzzy match as a fallback; still try color.pizza
+        # in case its `default`-list curation produces a better top-1.
+        local_fallback = (cands, tier, confident)
+    else:
+        local_fallback = None
+
     progress("Tier 2/3 • color.pizza name search")
     t23: tuple[list[Candidate], str, bool] | None = None
     color_pizza_failed = False  # transient error → ambiguous, may still escalate
@@ -165,9 +179,17 @@ def to_hex(query: str, k: int = 5,
         return Result(query, normalized, cands, confident, tier,
                        latency_ms=int((time.time() - started) * 1000))
 
-    # No tier-2/3 result. Two cases:
-    #   A. color.pizza answered "no match" → genuine miss; LLM is the only option.
-    #   B. color.pizza failed → can't tell; escalate, but don't pretend it's confident.
+    # No tier-2/3 result. Three cases:
+    #   A. We have a non-confident local fallback → return it (much faster than LLM,
+    #      and dataset coverage is good).
+    #   B. color.pizza answered "no match" with no local fallback → escalate to LLM.
+    #   C. color.pizza failed (no network access) and no local fallback → escalate
+    #      to LLM but mark confident=False.
+    if local_fallback is not None:
+        cands, tier, confident = local_fallback
+        return Result(query, normalized, cands, confident, tier,
+                       latency_ms=int((time.time() - started) * 1000))
+
     cands4, t4, conf4, spread = _tier4(query, model=model, k=k,
                                         on_progress=progress)
     if color_pizza_failed:
