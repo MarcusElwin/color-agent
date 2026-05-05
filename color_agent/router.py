@@ -18,6 +18,7 @@ from color_agent.normalize import normalize, parse_hex
 from color_agent.reflect import reflect
 from color_agent.tier1 import tier1
 from color_agent.tier23 import hex_neighbors, tier2_or_3
+from color_agent.tier_local import hex_neighbors_local, tier_local
 from color_agent.types import Candidate, Result
 
 ForceLayer = Literal["tier1", "tier2_3", "tier4_base", "tier4_reflect", "tier4_consistent"]
@@ -70,20 +71,25 @@ def to_hex(query: str, k: int = 5,
     progress("Normalizing query")
     normalized = normalize(query)
 
-    # Bare-hex input short-circuits to nearest-named neighbors.
+    # Bare-hex input short-circuits to nearest-named neighbors. Try the
+    # local 32k dataset first (no network); fall back to color.pizza only
+    # if local somehow returns nothing; final fallback is the input hex
+    # itself so the user always gets an answer.
     parsed_hex = parse_hex(query)
     if parsed_hex is not None:
-        progress(f"Hex passthrough • looking up nearest names for {parsed_hex}")
-        try:
-            cands = hex_neighbors(parsed_hex, k=k)
-            confident = bool(cands)
-        except Exception:
+        progress(f"Hex passthrough • local nearest-named for {parsed_hex}")
+        cands = hex_neighbors_local(parsed_hex, k=k)
+        if not cands:
+            try:
+                cands = hex_neighbors(parsed_hex, k=k)
+            except Exception:
+                pass
+        if not cands:
             cands = [Candidate(hex=parsed_hex, name="(hex)", score=1.0,
                                 source="parsed_hex")]
-            confident = True
         return Result(
             query=query, normalized=normalized, candidates=cands,
-            confident=confident, tier="hex", spread=None,
+            confident=True, tier="hex", spread=None,
             latency_ms=int((time.time() - started) * 1000),
         )
 
@@ -131,6 +137,20 @@ def to_hex(query: str, k: int = 5,
         return Result(query, normalized, t1, True, "1",
                        latency_ms=int((time.time() - started) * 1000))
 
+    # Tier 2.5: in-process 32k dataset. If confident, return immediately —
+    # color.pizza adds nothing and just costs a network round-trip (often a
+    # 1.5s 403 retry on commercial-feel networks).
+    progress("Tier 2.5 • local 32k name dictionary")
+    tlocal = tier_local(normalized, k=k)
+    if tlocal:
+        cands, tier, confident = tlocal
+        if confident:
+            return Result(query, normalized, cands, True, tier,
+                           latency_ms=int((time.time() - started) * 1000))
+        local_fallback = (cands, tier, confident)
+    else:
+        local_fallback = None
+
     progress("Tier 2/3 • color.pizza name search")
     try:
         t23 = tier2_or_3(normalized, k=k)
@@ -148,6 +168,13 @@ def to_hex(query: str, k: int = 5,
                                latency_ms=int((time.time() - started) * 1000))
             except Exception:
                 pass
+        return Result(query, normalized, cands, confident, tier,
+                       latency_ms=int((time.time() - started) * 1000))
+
+    # color.pizza had nothing. Prefer the (non-confident) local fallback
+    # over the LLM — much faster, and the dataset coverage is decent.
+    if local_fallback is not None:
+        cands, tier, confident = local_fallback
         return Result(query, normalized, cands, confident, tier,
                        latency_ms=int((time.time() - started) * 1000))
 
