@@ -44,7 +44,22 @@ cd color-agent
 pip install -e ".[dev]"
 ```
 
-For Tier 4 you need `ANTHROPIC_API_KEY`. Tiers 1–3 work without it.
+### API key
+
+Tier 4 (the LLM fallback) needs an Anthropic API key. Tiers 1–3 work without one — `crimson`, `cobalt blue`, `#0047AB` all resolve offline-ish.
+
+Two ways to provide it:
+
+```bash
+# 1. Export it in your shell
+export ANTHROPIC_API_KEY=sk-ant-...
+
+# 2. Or drop a .env file in the directory you run from
+cp .env.example .env
+# edit .env and add your key
+```
+
+The CLI auto-loads a `.env` from the current working directory (or any parent) on first Tier 4 call. Existing env vars take precedence over `.env` — the shell wins ties. Get a key at https://console.anthropic.com/settings/keys.
 
 ## Usage
 
@@ -70,11 +85,24 @@ color-agent-eval --json | jq                 # JSON for piping
 color-agent-eval --dataset path/to/cases.json
 ```
 
-Eval reports three things:
+Metrics computed (all in `compute_metrics(results)`, pure-functional):
 
-- **Accuracy by category** (CSS / standard / brand / descriptive / multilingual).
-- **Routing accuracy** — % of `lookup_resolvable` cases that did NOT escape to Tier 4. Target: ≥95%.
-- **Latency p50 / p95**.
+| Metric | What it tells you |
+|---|---|
+| `accuracy_pct` | Top-1 candidate within the case's tolerance |
+| `top1_pct` / `top3_pct` / `top5_pct` | How often the right answer is in the first K candidates — proves the K=5 list earns its place |
+| `mean_dist` / `median_dist` / `max_dist` | RGB-distance distribution across cases — accuracy hides the gap between dist=0 and dist=51 |
+| `latency_p50_ms` / `latency_p95_ms` / `latency_mean_ms` | Tier 1 is sub-millisecond; Tier 4 is 20–40s. Median tracks escalation rate. |
+| `routing_accuracy_pct` | % of `lookup_resolvable` cases that did NOT escape to Tier 4. **Target ≥95%** — the single most important metric. |
+| `tier4_efficiency_pct` | Inverse view: of all Tier 4 calls actually made, how many were necessary. |
+| `tier_mix` / `per_tier_accuracy` | Calls per tier + accuracy at each tier — find weak tiers in isolation. |
+| `confident_accuracy_pct` | When the system flags `confident=True`, how often is it actually right? Calibration check. |
+| `failures_wrong_hex` / `failures_no_result` / `errored` | Failure breakdown — wrong answer vs. nothing returned vs. exception are different bugs. |
+| `estimated_cost_usd` | Rough $ for the run (Tier 4 only; Sonnet 4.6 pricing). Approximation, useful for relative comparison across runs. |
+
+Each category has its own RGB-distance tolerance: tight (≤5 units) for canonical CSS names, generous (≤80) for descriptive/multilingual where multiple plausible hexes are all reasonable.
+
+The dataset (`evals/dataset.json`) covers 34 cases across 7 categories: `css_named`, `standard`, `fuzzy_name`, `brand`, `descriptive`, `multilingual`, `disambiguation`, `bare_hex`.
 
 ## Python API
 
