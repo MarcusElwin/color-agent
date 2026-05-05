@@ -289,8 +289,12 @@ def eval_cli(dataset: str | None, as_json: bool, quiet: bool) -> None:
     path = Path(dataset) if dataset else DATASET_PATH
 
     if as_json:
+        from color_agent.eval import compute_metrics
         results = run(path)
-        click.echo(jsonlib.dumps(results, indent=2, default=str))
+        click.echo(jsonlib.dumps(
+            {"metrics": compute_metrics(results), "results": results},
+            indent=2, default=str,
+        ))
         return
 
     if quiet:

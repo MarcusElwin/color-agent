@@ -103,11 +103,30 @@ CONFIDENCE_TO_SCORE = {"high": 0.9, "medium": 0.7, "low": 0.5}
 
 
 _client: Anthropic | None = None
+_dotenv_loaded = False
+
+
+def _ensure_dotenv_loaded() -> None:
+    """Load .env from cwd (or any parent) on first client construction.
+    No-op if python-dotenv isn't installed or no .env exists. Existing env
+    vars take precedence — we don't override what the shell already set."""
+    global _dotenv_loaded
+    if _dotenv_loaded:
+        return
+    _dotenv_loaded = True
+    try:
+        from dotenv import find_dotenv, load_dotenv
+    except ImportError:
+        return
+    path = find_dotenv(usecwd=True)
+    if path:
+        load_dotenv(path, override=False)
 
 
 def get_client() -> Anthropic:
     global _client
     if _client is None:
+        _ensure_dotenv_loaded()
         _client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
     return _client
 

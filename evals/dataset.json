@@ -3,13 +3,39 @@
   {"q": "rebeccapurple",      "expected": "#663399", "tol":  5, "category": "css_named",        "split": "lookup_resolvable"},
   {"q": "cornflowerblue",     "expected": "#6495ED", "tol":  5, "category": "css_named",        "split": "lookup_resolvable"},
   {"q": "grey",               "expected": "#808080", "tol":  5, "category": "css_named",        "split": "lookup_resolvable"},
+  {"q": "DARK SLATE GREY",    "expected": "#2F4F4F", "tol":  5, "category": "css_named",        "split": "lookup_resolvable"},
   {"q": "Cobalt-Blue!",       "expected": "#0047AB", "tol": 40, "category": "standard",         "split": "lookup_resolvable"},
   {"q": "burnt sienna",       "expected": "#E97451", "tol": 60, "category": "standard",         "split": "lookup_resolvable"},
   {"q": "salmon pink",        "expected": "#FF91A4", "tol": 60, "category": "standard",         "split": "lookup_resolvable"},
+  {"q": "deep teal",          "expected": "#003F45", "tol": 60, "category": "standard",         "split": "lookup_resolvable"},
+  {"q": "coral",              "expected": "#FF7F50", "tol": 30, "category": "standard",         "split": "lookup_resolvable"},
+  {"q": "mustard yellow",     "expected": "#FFDB58", "tol": 60, "category": "standard",         "split": "lookup_resolvable"},
+  {"q": "olive drab",         "expected": "#6B8E23", "tol": 30, "category": "standard",         "split": "lookup_resolvable"},
+  {"q": "cobalt",             "expected": "#0047AB", "tol": 60, "category": "fuzzy_name",       "split": "lookup_resolvable"},
+  {"q": "saphire",            "expected": "#0F52BA", "tol": 80, "category": "fuzzy_name",       "split": "lookup_resolvable"},
+
   {"q": "International Klein Blue", "expected": "#002FA7", "tol": 40, "category": "brand",      "split": "llm_required"},
   {"q": "Hermès orange",      "expected": "#FF7900", "tol": 60, "category": "brand",            "split": "llm_required"},
   {"q": "Tiffany blue",       "expected": "#0ABAB5", "tol": 60, "category": "brand",            "split": "llm_required"},
+  {"q": "Spotify green",      "expected": "#1DB954", "tol": 40, "category": "brand",            "split": "llm_required"},
+  {"q": "Stripe purple",      "expected": "#635BFF", "tol": 60, "category": "brand",            "split": "llm_required"},
+  {"q": "Pantone 1837",       "expected": "#0ABAB5", "tol": 80, "category": "brand",            "split": "llm_required"},
+
   {"q": "the color of a flamingo at sunset", "expected": "#FC8EAC", "tol": 80, "category": "descriptive", "split": "llm_required"},
   {"q": "muted forest green", "expected": "#4F7942", "tol": 80, "category": "descriptive",      "split": "llm_required"},
-  {"q": "rött koppar",        "expected": "#B87333", "tol": 80, "category": "multilingual",     "split": "llm_required"}
+  {"q": "warm dusk pink",     "expected": "#E1A09F", "tol": 80, "category": "descriptive",      "split": "llm_required"},
+  {"q": "deep ocean at midnight", "expected": "#001F3F", "tol": 80, "category": "descriptive",  "split": "llm_required"},
+  {"q": "dried lavender",     "expected": "#967BB6", "tol": 80, "category": "descriptive",      "split": "llm_required"},
+
+  {"q": "rött koppar",        "expected": "#B87333", "tol": 80, "category": "multilingual",     "split": "llm_required"},
+  {"q": "azul cobalto",       "expected": "#0047AB", "tol": 60, "category": "multilingual",     "split": "llm_required"},
+  {"q": "vert d'eau",         "expected": "#A8E4A0", "tol": 80, "category": "multilingual",     "split": "llm_required"},
+  {"q": "jade vert",          "expected": "#00A86B", "tol": 80, "category": "multilingual",     "split": "llm_required"},
+
+  {"q": "the green Spotify uses now",  "expected": "#1DB954", "tol": 40, "category": "disambiguation", "split": "llm_required"},
+  {"q": "old facebook blue (pre-2019)", "expected": "#3B5998", "tol": 60, "category": "disambiguation", "split": "llm_required"},
+
+  {"q": "#0047AB",            "expected": "#0047AB", "tol":  0, "category": "bare_hex",         "split": "lookup_resolvable"},
+  {"q": "0047ab",             "expected": "#0047AB", "tol":  0, "category": "bare_hex",         "split": "lookup_resolvable"},
+  {"q": "#FFFFFF",            "expected": "#FFFFFF", "tol":  0, "category": "bare_hex",         "split": "lookup_resolvable"}
 ]
