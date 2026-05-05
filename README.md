@@ -104,6 +104,45 @@ Each category has its own RGB-distance tolerance: tight (≤5 units) for canonic
 
 The dataset (`evals/dataset.json`) covers 34 cases across 7 categories: `css_named`, `standard`, `fuzzy_name`, `brand`, `descriptive`, `multilingual`, `disambiguation`, `bare_hex`.
 
+#### Latest run
+
+13 cases, all passing accuracy thresholds:
+
+```
+╭─ eval summary ──────────────────────────────────────────────────────────────╮
+│ Accuracy: 13/13 (100%)                                                      │
+│ Latency: p50 25268ms • p95 40837ms                                          │
+│ Routing accuracy: 4/7 (57%)  (target ≥95%)                                  │
+│ LLM-required reached Tier 4: 6/6                                            │
+╰─────────────────────────────────────────────────────────────────────────────╯
+By category
+╭──────────────┬────────┬───────┬──────╮
+│ category     │ passed │ total │ rate │
+├──────────────┼────────┼───────┼──────┤
+│ brand        │      3 │     3 │ 100% │
+│ css_named    │      4 │     4 │ 100% │
+│ descriptive  │      2 │     2 │ 100% │
+│ multilingual │      1 │     1 │ 100% │
+│ standard     │      3 │     3 │ 100% │
+╰──────────────┴────────┴───────┴──────╯
+Per-case (selected)
+  PASS  crimson                           tier=1         #DC143C  → #DC143C    0.0      0 ms
+  PASS  rebeccapurple                     tier=1         #663399  → #663399    0.0      0 ms
+  PASS  Cobalt-Blue!                      tier=4-base    #0047AB  → #0047AB    0.0  23918 ms  ← should be tier 2/3
+  PASS  burnt sienna                      tier=4-base    #E97451  → #E97451    0.0  25855 ms  ← should be tier 2/3
+  PASS  salmon pink                       tier=4-reflect #FF91A4  → #FF91A4    0.0  32429 ms  ← should be tier 2/3
+  PASS  International Klein Blue          tier=4-base    #002FA7  → #002FA7    0.0  30535 ms
+  PASS  Hermès orange                     tier=4-base    #FF7900  → #F37021   36.2  40837 ms
+  PASS  Tiffany blue                      tier=4-base    #0ABAB5  → #0ABAB5    0.0  31555 ms
+  PASS  the color of a flamingo at sunset tier=4-base    #FC8EAC  → #FF8C8C   32.2  28541 ms
+  PASS  muted forest green                tier=4-base    #4F7942  → #4A6741   18.7  25268 ms
+  PASS  rött koppar                       tier=4-base    #B87333  → #B5461B   51.1  22824 ms
+```
+
+> Note: this output is from the original 13-case dataset before [PR #3](https://github.com/MarcusElwin/color-agent/pull/3) grew it to 34. Re-run `color-agent-eval` for the current numbers — the new metrics (top-K hit rate, tier mix, confident-call accuracy, $ cost) only show up on the new dataset.
+
+**Honest take:** accuracy is 13/13, but **routing accuracy is 57%** — three `lookup_resolvable` queries (`Cobalt-Blue!`, `burnt sienna`, `salmon pink`) escaped to Tier 4 and burned ~25–32s of LLM time when they should have been served by color.pizza in <500ms. The router is failing soft to the LLM when color.pizza returns errors (we've seen 403s from some networks). Two follow-ups are needed: improve the color.pizza error handling so we don't bypass Tier 3 on transient failures, and lower the Tier 3 fuzzy threshold so partial-match standard queries land there. Tracking this in [TODO](#todo--known-issues).
+
 ## Python API
 
 ```python
@@ -124,13 +163,101 @@ result = to_hex("Pantone 1837", on_progress=log)
 
 `Result.candidates` is always a length-K (default 5) list ranked best-first.
 
-## Architecture notes
+## Architecture
 
-- **148 CSS named colors** embedded in-process (`color_agent/css_colors.py`); the 7 British "grey" spellings are aliased to American forms in `normalize.py`, so the dict holds 141 canonical keys.
-- **color.pizza** is queried with a 30-day SQLite cache (`color_agent/color_pizza.py`). Failures fail-soft to the LLM tier.
-- **Tier 4 base agent** uses a deliberate **two-step Anthropic call**: the first with `tool_choice=auto` so `web_search` can run, the second with `tool_choice` forced to `return_hex_list` so we get structured candidates. Forcing the tool in step 1 prefills the assistant turn and prevents `web_search` from running first — the single biggest gotcha if you build something similar.
-- **Self-consistency** runs N=5 parallel samples, picks the medoid (robust to outliers — one sample saying `#FF0000` against four cobalt samples loses), and uses pairwise spread as the confidence signal.
-- **Web-search tool version**: Sonnet 4.6 / Opus 4.7 use `web_search_20260209`; Haiku 4.5 uses `web_search_20250305`. Selected automatically per `MODEL_CONFIGS` in `agent.py`.
+The whole point is to keep cheap deterministic lookups in front of expensive LLM calls. The router walks the tiers in order; only queries the dictionaries can't handle reach the agent.
+
+### Full pipeline
+
+```
+                       ┌──────────────────────┐
+   raw query  ────────▶│  normalize.py         │  lower-case, strip punct,
+                       │  parse_hex            │  collapse ws, grey→gray,
+                       └────────┬──────────────┘  detect bare hex
+                                │
+                                ▼
+            ┌───────────────────────────────────────────┐
+            │   bare hex?                               │  yes → color.pizza
+            │   (#0047AB / 0047AB)                      │       hex_lookup
+            └────────────┬──────────────────────────────┘       (named neighbors)
+                         │ no
+                         ▼
+            ┌───────────────────────────────────────────┐
+            │  Tier 1 — css_colors.py (in-process)      │  ~0 ms, free
+            │  141 canonical CSS names; KNN-pad to K    │
+            └────────────┬──────────────────────────────┘
+                         │ miss
+                         ▼
+            ┌───────────────────────────────────────────┐
+            │  Tier 2/3 — color_pizza.py + tier23.py    │  ~50 ms, free
+            │  SQLite-cached (30-day TTL)               │
+            │   sim == 1.0     → Tier 2 (exact)         │
+            │   sim ≥  0.85    → Tier 3 (fuzzy)         │
+            │   sim ≥  0.92    → confident=True         │
+            └────────────┬──────────────────────────────┘
+                         │ miss / not confident / API error
+                         ▼
+       ┌────────────────────────────────────────────────────────────┐
+       │                    Tier 4 — LLM agent                      │
+       │                                                            │
+       │   query has brand/Pantone/PMS hints?                       │
+       │           ├── yes ──▶ consistent (skip base + reflect)     │
+       │           └── no  ──▶ base                                 │
+       │                                                            │
+       │   ┌──────────────────────────────────────────────────────┐ │
+       │   │  base — agent.py (two-step!)                         │ │
+       │   │  step 1: tool_choice=auto, web_search may run        │ │
+       │   │  step 2: tool_choice=force return_hex_list           │ │
+       │   │  ↓ overall_confidence                                │ │
+       │   │  high   → return                                     │ │
+       │   │  medium → reflect                                    │ │
+       │   │  low    → consistent                                 │ │
+       │   └──────────────────────────────────────────────────────┘ │
+       │                                                            │
+       │   ┌──────────────────────────────────────────────────────┐ │
+       │   │  reflect — reflect.py                                │ │
+       │   │  Single critique pass; same-model Sonnet by default, │ │
+       │   │  reviewer kwarg lets you A/B Opus 4.7.               │ │
+       │   └──────────────────────────────────────────────────────┘ │
+       │                                                            │
+       │   ┌──────────────────────────────────────────────────────┐ │
+       │   │  consistent — consistency.py                         │ │
+       │   │  N=5 parallel samples (ThreadPool default; Batches   │ │
+       │   │  API path available for −50% non-latency-sensitive). │ │
+       │   │  medoid winner (robust to outliers); pairwise spread │ │
+       │   │  overrides model self-reported confidence.           │ │
+       │   └──────────────────────────────────────────────────────┘ │
+       └────────────────────────────────────────────────────────────┘
+                         │
+                         ▼
+                Result(candidates=[...]≥K, tier, confident, spread, latency_ms)
+```
+
+### Module map
+
+| File                       | Responsibility                                             |
+|----------------------------|------------------------------------------------------------|
+| `types.py`                 | `Candidate`, `Result` dataclasses + score-semantics doc    |
+| `normalize.py`             | Single canonical key for cache hits + bare-hex detection   |
+| `css_colors.py` + `tier1.py` | 141 CSS named colors + KNN-pad to K candidates           |
+| `distance.py`              | RGB distance, hex↔rgb, medoid, KNN                          |
+| `color_pizza.py`           | HTTP client + SQLite write-through cache (30-day TTL)      |
+| `tier23.py`                | Maps color.pizza response → ranked `Candidate` list        |
+| `agent.py`                 | Two-step Tier 4 base; `MODEL_CONFIGS`; `return_hex_list`   |
+| `reflect.py`               | Single-pass critique; same-model or reviewer override      |
+| `consistency.py`           | N=5 sampling, medoid winner, spread-derived confidence     |
+| `router.py`                | Orchestrates the tiers + Tier 4 sub-routing + `--force`    |
+| `prompts.py`               | All system prompts in one place                            |
+| `cli.py`                   | Click + Rich CLI (banner, table, swatches, live spinner)   |
+| `eval.py`                  | Eval runner + reporter; `--json` / `--quiet` / Rich modes  |
+
+### Things worth knowing if you build something similar
+
+- **The two-step Tier 4 call is non-negotiable.** Forcing `tool_choice={type:"tool",name:"return_hex_list"}` prefills the assistant turn and prevents the model from calling `web_search` first. So step 1 runs with `tool_choice=auto` (search may run, citations come back), step 2 appends that turn and forces the structured return. Merging them was my first attempt and it silently never searched.
+- **Web-search tool version is model-coupled.** Sonnet 4.6 / Opus 4.7 use `web_search_20260209` (dynamic filtering, server auto-injects `code_execution`). Haiku 4.5 uses the older `web_search_20250305`. Adding `code_execution` manually to the tools array on the new version returns `400 invalid_request_error: tool name conflict` — the API auto-injects it.
+- **Medoid > centroid for self-consistency.** With samples `[#0047AB, #0050B0, #0045A8, #0047AB, #FF0000]`, the centroid would be `~#332E89` — a never-output color. The medoid picks an actual sample and is robust to the one outlier.
+- **British greys are aliased before lookup.** The CSS spec defines 148 names but 7 are British spellings of greys. `normalize.py` collapses them so the in-process dict holds 141 canonical American keys.
+- **Tier 3 fail-soft escalates to Tier 4 on color.pizza errors.** Currently this is too aggressive — see eval routing accuracy above.
 
 ## Output contract
 
@@ -162,6 +289,13 @@ pip install -e ".[dev]"
 pytest                       # 75 mocked + unit tests
 pytest -m live               # live tests (needs ANTHROPIC_API_KEY)
 ```
+
+## TODO / known issues
+
+- [ ] **Routing accuracy is at 57%** on the current dataset (target ≥95%). Three `lookup_resolvable` queries are escaping to Tier 4 because color.pizza returned errors and the router fails open to the LLM. Fix candidates: distinguish `404 / empty` from `5xx / 403` so we only escalate on actual missing-data, retry once with backoff, and lower the Tier 3 fuzzy threshold from 0.85 → ~0.7 for `standard`-tier queries.
+- [ ] Grow the eval dataset: more multilingual cases (currently 1/13), disambiguation pairs ("the green Stripe used in 2023" vs current), bare-hex inputs (`#0047AB`), and intentional negative cases (`xyzzy`).
+- [ ] Cache the Tier 4 LLM responses too — repeat queries shouldn't pay the 25-second cost twice.
+- [ ] Add a `--top-k` aware Tier 4 prompt so the model can return fewer candidates when the user explicitly asked for fewer.
 
 ## Credits
 
