@@ -276,21 +276,30 @@ class _EvalBannerCommand(click.Command):
                context_settings={"help_option_names": ["-h", "--help"]})
 @click.option("--dataset", type=click.Path(exists=True, dir_okay=False),
               default=None, help="Override the default eval dataset path.")
+@click.option("--model", default=DEFAULT_MODEL, show_default=True,
+              help="Model used for Tier 4 LLM calls (overridden by --fast).")
+@click.option("--fast", is_flag=True,
+              help=f"Route Tier 4 to {FAST_MODEL} (~3x cheaper, faster, "
+                   "weaker on brand reasoning).")
 @click.option("--json", "as_json", is_flag=True,
               help="Emit raw JSON results instead of styled report.")
 @click.option("--quiet", is_flag=True,
               help="Plain-text output, no progress bar.")
-def eval_cli(dataset: str | None, as_json: bool, quiet: bool) -> None:
+def eval_cli(dataset: str | None, model: str, fast: bool,
+             as_json: bool, quiet: bool) -> None:
     """Run the eval harness across the dataset."""
     from color_agent.eval import (
         DATASET_PATH, report, report_plain, run, run_with_progress,
     )
 
+    if fast:
+        model = FAST_MODEL
+
     path = Path(dataset) if dataset else DATASET_PATH
 
     if as_json:
         from color_agent.eval import compute_metrics
-        results = run(path)
+        results = run(path, model=model)
         click.echo(jsonlib.dumps(
             {"metrics": compute_metrics(results), "results": results},
             indent=2, default=str,
@@ -298,14 +307,14 @@ def eval_cli(dataset: str | None, as_json: bool, quiet: bool) -> None:
         return
 
     if quiet:
-        results = run(path)
+        results = run(path, model=model)
         report_plain(results)
         return
 
     console = Console()
     _print_banner(console)
     console.print()
-    results = run_with_progress(path, console=console)
+    results = run_with_progress(path, console=console, model=model)
     console.print()
     report(results, console=console)
 
