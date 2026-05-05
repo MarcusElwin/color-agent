@@ -34,7 +34,7 @@ _OBSCURE = re.compile(
 
 
 def _tier4(query: str, model: str = "claude-sonnet-4-6", k: int = 5,
-           on_progress: ProgressFn = _noop,
+           on_progress: ProgressFn = _noop, use_cache: bool = True,
            ) -> tuple[list[Candidate], str, bool, float | None]:
     """Run Tier 4 with sub-routing. Returns (candidates, tier_label, confident, spread)."""
     if _OBSCURE.search(query):
@@ -43,7 +43,9 @@ def _tier4(query: str, model: str = "claude-sonnet-4-6", k: int = 5,
         return cands, "4-consistent", cands[0].score >= 0.9, spread
 
     on_progress(f"Tier 4 base • web_search step • {model}")
-    initial = call_agent(query, model=model)
+    initial = call_agent(query, model=model, use_cache=use_cache)
+    if initial.get("_cache_hit"):
+        on_progress(f"Tier 4 base • cache hit • {model}")
     overall = initial.get("overall_confidence", "medium")
 
     if overall == "high":
@@ -64,7 +66,8 @@ def _tier4(query: str, model: str = "claude-sonnet-4-6", k: int = 5,
 def to_hex(query: str, k: int = 5,
            force: ForceLayer | None = None,
            model: str = "claude-sonnet-4-6",
-           on_progress: ProgressFn | None = None) -> Result:
+           on_progress: ProgressFn | None = None,
+           use_cache: bool = True) -> Result:
     progress = on_progress or _noop
     started = time.time()
     progress("Normalizing query")
@@ -105,13 +108,13 @@ def to_hex(query: str, k: int = 5,
 
     if force == "tier4_base":
         progress(f"Tier 4 base (forced) • {model}")
-        cands = to_candidates(call_agent(query, model=model), k=k)
+        cands = to_candidates(call_agent(query, model=model, use_cache=use_cache), k=k)
         return Result(query, normalized, cands, True, "4-base",
                        latency_ms=int((time.time() - started) * 1000))
 
     if force == "tier4_reflect":
         progress(f"Tier 4 base + reflect (forced) • {model}")
-        initial = call_agent(query, model=model)
+        initial = call_agent(query, model=model, use_cache=use_cache)
         progress(f"Tier 4 reflection • {model}")
         cands = to_candidates(reflect(query, initial), k=k)
         return Result(query, normalized, cands, True, "4-reflect",
@@ -142,7 +145,8 @@ def to_hex(query: str, k: int = 5,
         if not confident:
             try:
                 cands4, t4, conf4, spread = _tier4(query, model=model, k=k,
-                                                    on_progress=progress)
+                                                    on_progress=progress,
+                                                    use_cache=use_cache)
                 return Result(query, normalized, cands4, conf4, t4,
                                spread=spread,
                                latency_ms=int((time.time() - started) * 1000))
@@ -152,6 +156,7 @@ def to_hex(query: str, k: int = 5,
                        latency_ms=int((time.time() - started) * 1000))
 
     cands4, t4, conf4, spread = _tier4(query, model=model, k=k,
-                                        on_progress=progress)
+                                        on_progress=progress,
+                                        use_cache=use_cache)
     return Result(query, normalized, cands4, conf4, t4, spread=spread,
                    latency_ms=int((time.time() - started) * 1000))

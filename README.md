@@ -106,42 +106,57 @@ The dataset (`evals/dataset.json`) covers 34 cases across 7 categories: `css_nam
 
 #### Latest run
 
-13 cases, all passing accuracy thresholds:
+34 cases, 32 passing (94.1%):
 
 ```
-╭─ eval summary ──────────────────────────────────────────────────────────────╮
-│ Accuracy: 13/13 (100%)                                                      │
-│ Latency: p50 25268ms • p95 40837ms                                          │
-│ Routing accuracy: 4/7 (57%)  (target ≥95%)                                  │
-│ LLM-required reached Tier 4: 6/6                                            │
-╰─────────────────────────────────────────────────────────────────────────────╯
+╭─ eval summary ────────────────────────────────────────────────────────────────────╮
+│ Accuracy: 32/34 (94.1%)  •  Top-1/3/5: 94.1% / 100.0% / 100.0%                    │
+│ Distance: mean 17.8 • median 0.0 • max 125.7                                      │
+│ Latency: p50 27713ms • p95 46896ms • mean 23493ms                                 │
+│ Routing accuracy: 10/17 (58.8%)  (target ≥95%)  •  Tier-4 necessity: 17/24 (70.8%)│
+│ LLM-required reached Tier 4: 17/17  •  Confident-call accuracy: 94.1% (34 calls)  │
+│ Failures: 2 wrong hex • 0 no result • 0 errors                                    │
+│ Estimated LLM cost: $0.5460  (rough — Sonnet 4.6 pricing)                         │
+╰───────────────────────────────────────────────────────────────────────────────────╯
+
 By category
-╭──────────────┬────────┬───────┬──────╮
-│ category     │ passed │ total │ rate │
-├──────────────┼────────┼───────┼──────┤
-│ brand        │      3 │     3 │ 100% │
-│ css_named    │      4 │     4 │ 100% │
-│ descriptive  │      2 │     2 │ 100% │
-│ multilingual │      1 │     1 │ 100% │
-│ standard     │      3 │     3 │ 100% │
-╰──────────────┴────────┴───────┴──────╯
-Per-case (selected)
-  PASS  crimson                           tier=1         #DC143C  → #DC143C    0.0      0 ms
-  PASS  rebeccapurple                     tier=1         #663399  → #663399    0.0      0 ms
-  PASS  Cobalt-Blue!                      tier=4-base    #0047AB  → #0047AB    0.0  23918 ms  ← should be tier 2/3
-  PASS  burnt sienna                      tier=4-base    #E97451  → #E97451    0.0  25855 ms  ← should be tier 2/3
-  PASS  salmon pink                       tier=4-reflect #FF91A4  → #FF91A4    0.0  32429 ms  ← should be tier 2/3
-  PASS  International Klein Blue          tier=4-base    #002FA7  → #002FA7    0.0  30535 ms
-  PASS  Hermès orange                     tier=4-base    #FF7900  → #F37021   36.2  40837 ms
-  PASS  Tiffany blue                      tier=4-base    #0ABAB5  → #0ABAB5    0.0  31555 ms
-  PASS  the color of a flamingo at sunset tier=4-base    #FC8EAC  → #FF8C8C   32.2  28541 ms
-  PASS  muted forest green                tier=4-base    #4F7942  → #4A6741   18.7  25268 ms
-  PASS  rött koppar                       tier=4-base    #B87333  → #B5461B   51.1  22824 ms
+╭────────────────┬────────┬───────┬──────╮
+│ category       │ passed │ total │ rate │
+├────────────────┼────────┼───────┼──────┤
+│ bare_hex       │      3 │     3 │ 100% │
+│ brand          │      5 │     6 │  83% │
+│ css_named      │      5 │     5 │ 100% │
+│ descriptive    │      5 │     5 │ 100% │
+│ disambiguation │      2 │     2 │ 100% │
+│ fuzzy_name     │      2 │     2 │ 100% │
+│ multilingual   │      4 │     4 │ 100% │
+│ standard       │      6 │     7 │  86% │
+╰────────────────┴────────┴───────┴──────╯
+
+By tier
+╭──────────────┬───────┬───────┬──────────────╮
+│ tier         │ calls │ share │     accuracy │
+├──────────────┼───────┼───────┼──────────────┤
+│ 1            │     7 │   21% │   7/7 (100%) │
+│ 4-base       │    18 │   53% │ 18/18 (100%) │
+│ 4-reflect    │     5 │   15% │    4/5 (80%) │
+│ 4-consistent │     1 │    3% │     0/1 (0%) │
+│ hex          │     3 │    9% │   3/3 (100%) │
+╰──────────────┴───────┴───────┴──────────────╯
+
+Failed cases
+  FAIL  deep teal     tier=4-reflect    #003F45  → #007070   65.2  41684 ms
+  FAIL  Pantone 1837  tier=4-consistent #0ABAB5  → #81D8D0  125.7  47400 ms
 ```
 
-> Note: this output is from the original 13-case dataset before [PR #3](https://github.com/MarcusElwin/color-agent/pull/3) grew it to 34. Re-run `color-agent-eval` for the current numbers — the new metrics (top-K hit rate, tier mix, confident-call accuracy, $ cost) only show up on the new dataset.
+**What this run actually says:**
 
-**Honest take:** accuracy is 13/13, but **routing accuracy is 57%** — three `lookup_resolvable` queries (`Cobalt-Blue!`, `burnt sienna`, `salmon pink`) escaped to Tier 4 and burned ~25–32s of LLM time when they should have been served by color.pizza in <500ms. The router is failing soft to the LLM when color.pizza returns errors (we've seen 403s from some networks). Two follow-ups are needed: improve the color.pizza error handling so we don't bypass Tier 3 on transient failures, and lower the Tier 3 fuzzy threshold so partial-match standard queries land there. Tracking this in [TODO](#todo--known-issues).
+- **Top-3 = 100%.** Top-1 misses on 2 cases, but the right hex is in candidates 2 or 3 every time. The K=5 list earns its place — callers who can show a small gallery never see a true miss.
+- **Routing accuracy is 58.8%, still below the 95% target.** 7 of 17 `lookup_resolvable` queries escaped to Tier 4. The pattern: standard-named colors that *do* exist in color.pizza (`burnt sienna`, `salmon pink`, `mustard yellow`) escape because of color.pizza errors / threshold mismatches. Fix is upstream of the LLM, not in the LLM. Tracked in [TODO](#todo--known-issues).
+- **Tier-4 necessity 70.8%.** Of 24 Tier 4 calls, 7 were unnecessary — those are the same 7 lookup-escapes from above, just viewed from the cost side.
+- **`4-reflect` is 4/5; `4-consistent` is 0/1.** Reflect and consistent are the two layers that should *correct* low-confidence base outputs, but here the only consistent run (`Pantone 1837`) failed badly (dist 125.7 — the model converged on `#81D8D0` Tiffany Box Blue, which is a real Pantone color but not 1837 specifically). With N=1 sample we can't conclude consistency is broken — the dataset needs more brand cases that trigger it.
+- **Confident-call accuracy 94.1%.** When the system says `confident=True`, it's right 32 of 34 times. Calibration looks honest.
+- **$0.55 to run the suite.** With 7 unnecessary Tier 4 calls (~$0.16 of that), fixing routing reclaims ~30% of the bill.
 
 ## Python API
 
@@ -294,7 +309,7 @@ pytest -m live               # live tests (needs ANTHROPIC_API_KEY)
 
 - [ ] **Routing accuracy is at 57%** on the current dataset (target ≥95%). Three `lookup_resolvable` queries are escaping to Tier 4 because color.pizza returned errors and the router fails open to the LLM. Fix candidates: distinguish `404 / empty` from `5xx / 403` so we only escalate on actual missing-data, retry once with backoff, and lower the Tier 3 fuzzy threshold from 0.85 → ~0.7 for `standard`-tier queries.
 - [ ] Grow the eval dataset: more multilingual cases (currently 1/13), disambiguation pairs ("the green Stripe used in 2023" vs current), bare-hex inputs (`#0047AB`), and intentional negative cases (`xyzzy`).
-- [ ] Cache the Tier 4 LLM responses too — repeat queries shouldn't pay the 25-second cost twice.
+- [x] Cache the Tier 4 LLM responses (SQLite, 30-day TTL, keyed on `(query, model)`). Repeat queries drop from ~25s to <10ms. `--no-cache` bypasses; `color-agent-eval --clear-cache` wipes.
 - [ ] Add a `--top-k` aware Tier 4 prompt so the model can return fewer candidates when the user explicitly asked for fewer.
 
 ## Credits

@@ -30,6 +30,7 @@ from rich.progress import (
 from rich.table import Table
 from rich.text import Text
 
+from color_agent.agent import DEFAULT_MODEL
 from color_agent.distance import rgb_distance
 from color_agent.router import to_hex
 
@@ -50,15 +51,15 @@ TIER_COLOR = {
 }
 
 
-def _evaluate_case(case: dict) -> dict:
+def _evaluate_case(case: dict, model: str = DEFAULT_MODEL,
+                    use_cache: bool = True) -> dict:
     """Run one case end-to-end. Pure function — no I/O beyond to_hex itself.
     Captures the full candidate list so we can compute top-K hit rates."""
     t0 = time.time()
     try:
-        r = to_hex(case["q"])
+        r = to_hex(case["q"], model=model, use_cache=use_cache)
         top = r.candidates[0] if r.candidates else None
         d = rgb_distance(top.hex, case["expected"]) if top else float("inf")
-        # Distance from each candidate to the expected hex — supports top-K hit rate.
         all_dists = [rgb_distance(c.hex, case["expected"]) for c in r.candidates]
         return {
             **case,
@@ -72,11 +73,13 @@ def _evaluate_case(case: dict) -> dict:
             "k": len(r.candidates),
             "all_dists": [round(x, 1) for x in all_dists],
             "all_hexes": [c.hex for c in r.candidates],
+            "model": model,
         }
     except Exception as e:
         return {
             **case, "error": repr(e), "passed": False,
             "latency_ms": int((time.time() - t0) * 1000),
+            "model": model,
         }
 
 
@@ -102,16 +105,19 @@ TIER4_TOKENS = {
 
 
 def _estimate_cost_usd(results: list[dict],
-                       model: str = "claude-sonnet-4-6") -> float:
-    """Approximate $ spent on Tier 4 LLM calls in a run."""
-    in_rate = MODEL_COST_PER_M_INPUT.get(model, 3.0) / 1_000_000
-    out_rate = MODEL_COST_PER_M_OUTPUT.get(model, 15.0) / 1_000_000
+                       model: str | None = None) -> float:
+    """Approximate $ spent on Tier 4 LLM calls. Per-row `model` field wins;
+    falls back to the explicit `model` arg, then to Sonnet 4.6 pricing."""
     total = 0.0
     for r in results:
         tier = r.get("tier", "")
         toks = TIER4_TOKENS.get(tier)
-        if toks:
-            total += toks[0] * in_rate + toks[1] * out_rate
+        if not toks:
+            continue
+        m = r.get("model") or model or "claude-sonnet-4-6"
+        in_rate = MODEL_COST_PER_M_INPUT.get(m, 3.0) / 1_000_000
+        out_rate = MODEL_COST_PER_M_OUTPUT.get(m, 15.0) / 1_000_000
+        total += toks[0] * in_rate + toks[1] * out_rate
     return round(total, 4)
 
 
@@ -241,17 +247,20 @@ def compute_metrics(results: list[dict]) -> dict:
         "failures_no_result": len(no_result),
 
         "estimated_cost_usd": _estimate_cost_usd(results),
+        "models_used": sorted({r.get("model") for r in results if r.get("model")}),
     }
 
 
 def run(path: Path = DATASET_PATH,
-        on_case_done: Callable[[dict], None] | None = None) -> list[dict]:
+        on_case_done: Callable[[dict], None] | None = None,
+        model: str = DEFAULT_MODEL,
+        use_cache: bool = True) -> list[dict]:
     """Run every case in the dataset, optionally invoking on_case_done after
     each so callers can render progress."""
     cases = json.loads(Path(path).read_text())
     results: list[dict] = []
     for c in cases:
-        result = _evaluate_case(c)
+        result = _evaluate_case(c, model=model, use_cache=use_cache)
         results.append(result)
         if on_case_done is not None:
             on_case_done(result)
@@ -259,7 +268,9 @@ def run(path: Path = DATASET_PATH,
 
 
 def run_with_progress(path: Path = DATASET_PATH,
-                      console: Console | None = None) -> list[dict]:
+                      console: Console | None = None,
+                      model: str = DEFAULT_MODEL,
+                      use_cache: bool = True) -> list[dict]:
     """Run() with a live Rich progress bar showing per-case status."""
     console = console or Console()
     cases = json.loads(Path(path).read_text())
@@ -282,7 +293,7 @@ def run_with_progress(path: Path = DATASET_PATH,
         task = progress.add_task("[bold]Eval[/]", total=len(cases))
         for c in cases:
             progress.update(task, description=f"[bold]Eval[/] • {c['q'][:40]}")
-            result = _evaluate_case(c)
+            result = _evaluate_case(c, model=model, use_cache=use_cache)
             results.append(result)
             if result.get("passed"):
                 pass_count += 1
@@ -404,7 +415,9 @@ def report(results: list[dict], console: Console | None = None) -> None:
     headline.append("\n")
     headline.append("Estimated LLM cost: ", style="white")
     headline.append(f"${metrics['estimated_cost_usd']:.4f}", style="yellow")
-    headline.append("  (rough — Sonnet 4.6 pricing)", style="dim")
+    if metrics.get("models_used"):
+        headline.append(f"  (model: {', '.join(metrics['models_used'])})",
+                         style="dim")
 
     console.print(Panel(headline, title="[bold]eval summary[/]",
                          title_align="left", border_style="cyan", box=ROUNDED))
@@ -521,7 +534,8 @@ def report_plain(results: list[dict]) -> None:
     if m["failures_wrong_hex"] or m["failures_no_result"] or m["errored"]:
         print(f"Failures: {m['failures_wrong_hex']} wrong hex, "
               f"{m['failures_no_result']} no result, {m['errored']} errors")
-    print(f"Estimated cost: ${m['estimated_cost_usd']:.4f}")
+    models = ", ".join(m.get("models_used") or []) or "n/a"
+    print(f"Estimated cost: ${m['estimated_cost_usd']:.4f}  (model: {models})")
 
     print("\nBy category:")
     for cat, rs in sorted(by_cat.items()):

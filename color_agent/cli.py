@@ -231,21 +231,26 @@ class _LiveSpinner:
               help="Emit machine-readable JSON instead of a table.")
 @click.option("--no-color", is_flag=True, help="Disable ANSI color swatches.")
 @click.option("--quiet", is_flag=True, help="Suppress the progress spinner.")
+@click.option("--no-cache", is_flag=True,
+              help="Skip the Tier 4 SQLite cache (always hit the LLM).")
 def cli(query: str, top_k: int, force: str | None, model: str,
-        fast: bool, as_json: bool, no_color: bool, quiet: bool) -> None:
+        fast: bool, as_json: bool, no_color: bool, quiet: bool,
+        no_cache: bool) -> None:
     """Convert a color description to ranked hex candidates."""
     if fast:
         model = FAST_MODEL
 
     show_spinner = not (as_json or quiet or no_color)
+    use_cache = not no_cache
 
     if show_spinner:
         console = Console()
         with _LiveSpinner(console) as spin:
             result = to_hex(query, k=top_k, force=force, model=model,
-                             on_progress=spin.update)
+                             on_progress=spin.update, use_cache=use_cache)
     else:
-        result = to_hex(query, k=top_k, force=force, model=model)
+        result = to_hex(query, k=top_k, force=force, model=model,
+                         use_cache=use_cache)
 
     if as_json:
         payload = {
@@ -276,21 +281,42 @@ class _EvalBannerCommand(click.Command):
                context_settings={"help_option_names": ["-h", "--help"]})
 @click.option("--dataset", type=click.Path(exists=True, dir_okay=False),
               default=None, help="Override the default eval dataset path.")
+@click.option("--model", default=DEFAULT_MODEL, show_default=True,
+              help="Model used for Tier 4 LLM calls (overridden by --fast).")
+@click.option("--fast", is_flag=True,
+              help=f"Route Tier 4 to {FAST_MODEL} (~3x cheaper, faster, "
+                   "weaker on brand reasoning).")
 @click.option("--json", "as_json", is_flag=True,
               help="Emit raw JSON results instead of styled report.")
 @click.option("--quiet", is_flag=True,
               help="Plain-text output, no progress bar.")
-def eval_cli(dataset: str | None, as_json: bool, quiet: bool) -> None:
+@click.option("--no-cache", is_flag=True,
+              help="Skip the Tier 4 SQLite cache for a fresh run.")
+@click.option("--clear-cache", is_flag=True,
+              help="Wipe the Tier 4 cache and exit.")
+def eval_cli(dataset: str | None, model: str, fast: bool,
+             as_json: bool, quiet: bool,
+             no_cache: bool, clear_cache: bool) -> None:
     """Run the eval harness across the dataset."""
+    if clear_cache:
+        from color_agent import agent_cache
+        agent_cache.invalidate_all()
+        click.echo("Tier 4 cache cleared.")
+        return
+
     from color_agent.eval import (
         DATASET_PATH, report, report_plain, run, run_with_progress,
     )
 
+    if fast:
+        model = FAST_MODEL
+
+    use_cache = not no_cache
     path = Path(dataset) if dataset else DATASET_PATH
 
     if as_json:
         from color_agent.eval import compute_metrics
-        results = run(path)
+        results = run(path, model=model, use_cache=use_cache)
         click.echo(jsonlib.dumps(
             {"metrics": compute_metrics(results), "results": results},
             indent=2, default=str,
@@ -298,14 +324,15 @@ def eval_cli(dataset: str | None, as_json: bool, quiet: bool) -> None:
         return
 
     if quiet:
-        results = run(path)
+        results = run(path, model=model, use_cache=use_cache)
         report_plain(results)
         return
 
     console = Console()
     _print_banner(console)
     console.print()
-    results = run_with_progress(path, console=console)
+    results = run_with_progress(path, console=console, model=model,
+                                  use_cache=use_cache)
     console.print()
     report(results, console=console)
 

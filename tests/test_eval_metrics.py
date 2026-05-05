@@ -1,5 +1,7 @@
 """compute_metrics is a pure function — easy to drive with synthetic results."""
 
+import pytest
+
 from color_agent.eval import compute_metrics
 
 
@@ -133,3 +135,29 @@ def test_distance_summary():
 
 def test_empty_results():
     assert compute_metrics([]) == {"total": 0}
+
+
+def test_models_used_field():
+    sonnet = [_case(f"q{i}", "#000", 10, tier="4-base", dist=0,
+                     split="llm_required", category="brand") | {"model": "claude-sonnet-4-6"}
+               for i in range(2)]
+    haiku = [_case(f"q{i}", "#000", 10, tier="4-base", dist=0,
+                    split="llm_required", category="brand") | {"model": "claude-haiku-4-5"}
+              for i in range(2)]
+    m = compute_metrics(sonnet + haiku)
+    assert m["models_used"] == ["claude-haiku-4-5", "claude-sonnet-4-6"]
+
+
+def test_haiku_cheaper_than_sonnet_for_same_workload():
+    """--fast should produce a meaningfully smaller cost estimate."""
+    sonnet = [_case(f"q{i}", "#000", 10, tier="4-base", dist=0,
+                     split="llm_required", category="brand") | {"model": "claude-sonnet-4-6"}
+               for i in range(5)]
+    haiku = [_case(f"q{i}", "#000", 10, tier="4-base", dist=0,
+                    split="llm_required", category="brand") | {"model": "claude-haiku-4-5"}
+              for i in range(5)]
+    s_cost = compute_metrics(sonnet)["estimated_cost_usd"]
+    h_cost = compute_metrics(haiku)["estimated_cost_usd"]
+    assert h_cost < s_cost
+    # Sonnet 4.6 is $3/$15 per M; Haiku 4.5 is $1/$5. Roughly 3x.
+    assert s_cost / h_cost == pytest.approx(3.0, abs=0.05)
