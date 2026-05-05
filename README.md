@@ -309,7 +309,7 @@ pytest -m live               # live tests (needs ANTHROPIC_API_KEY)
 
 - [ ] **Routing accuracy is at 57%** on the current dataset (target ≥95%). Three `lookup_resolvable` queries are escaping to Tier 4 because color.pizza returned errors and the router fails open to the LLM. Fix candidates: distinguish `404 / empty` from `5xx / 403` so we only escalate on actual missing-data, retry once with backoff, and lower the Tier 3 fuzzy threshold from 0.85 → ~0.7 for `standard`-tier queries.
 - [ ] Grow the eval dataset: more multilingual cases (currently 1/13), disambiguation pairs ("the green Stripe used in 2023" vs current), bare-hex inputs (`#0047AB`), and intentional negative cases (`xyzzy`).
-- [ ] Cache the Tier 4 LLM responses too — repeat queries shouldn't pay the 25-second cost twice.
+- [x] Cache the Tier 4 LLM responses (SQLite, 30-day TTL, keyed on `(query, model)`). Repeat queries drop from ~25s to <10ms. `--no-cache` bypasses; `color-agent-eval --clear-cache` wipes.
 - [ ] Add a `--top-k` aware Tier 4 prompt so the model can return fewer candidates when the user explicitly asked for fewer.
 
 ## Credits

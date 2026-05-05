@@ -173,10 +173,22 @@ def _gather_search_context(query: str, cfg: ModelConfig,
 
 def call_agent(query: str, model: str = DEFAULT_MODEL,
                max_uses: int = 3, client: Anthropic | None = None,
-               temperature: float | None = None) -> dict[str, Any]:
-    """Tier 4 base. Returns the parsed return_hex_list payload as a dict."""
+               temperature: float | None = None,
+               use_cache: bool = True) -> dict[str, Any]:
+    """Tier 4 base. Returns the parsed return_hex_list payload as a dict.
+
+    Cache: skipped when temperature is set (consistency path wants variance)
+    or when use_cache=False. Otherwise repeat (query, model) pairs hit a
+    30-day SQLite cache and skip both API calls."""
     cli = client or get_client()
     cfg = model_config(model, max_uses=max_uses)
+
+    cacheable = use_cache and temperature is None
+    if cacheable:
+        from color_agent import agent_cache
+        cached = agent_cache.get(query, model)
+        if cached is not None:
+            return {**cached, "_cache_hit": True}
 
     messages, search_content = _gather_search_context(query, cfg, cli)
 
@@ -203,7 +215,11 @@ def call_agent(query: str, model: str = DEFAULT_MODEL,
 
     for b in final.content:
         if getattr(b, "type", None) == "tool_use" and b.name == "return_hex_list":
-            return dict(b.input)
+            payload = dict(b.input)
+            if cacheable:
+                from color_agent import agent_cache
+                agent_cache.put(query, model, payload)
+            return payload
 
     raise RuntimeError("Tier 4 agent did not call return_hex_list")
 

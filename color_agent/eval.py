@@ -51,12 +51,13 @@ TIER_COLOR = {
 }
 
 
-def _evaluate_case(case: dict, model: str = DEFAULT_MODEL) -> dict:
+def _evaluate_case(case: dict, model: str = DEFAULT_MODEL,
+                    use_cache: bool = True) -> dict:
     """Run one case end-to-end. Pure function — no I/O beyond to_hex itself.
     Captures the full candidate list so we can compute top-K hit rates."""
     t0 = time.time()
     try:
-        r = to_hex(case["q"], model=model)
+        r = to_hex(case["q"], model=model, use_cache=use_cache)
         top = r.candidates[0] if r.candidates else None
         d = rgb_distance(top.hex, case["expected"]) if top else float("inf")
         all_dists = [rgb_distance(c.hex, case["expected"]) for c in r.candidates]
@@ -252,13 +253,14 @@ def compute_metrics(results: list[dict]) -> dict:
 
 def run(path: Path = DATASET_PATH,
         on_case_done: Callable[[dict], None] | None = None,
-        model: str = DEFAULT_MODEL) -> list[dict]:
+        model: str = DEFAULT_MODEL,
+        use_cache: bool = True) -> list[dict]:
     """Run every case in the dataset, optionally invoking on_case_done after
     each so callers can render progress."""
     cases = json.loads(Path(path).read_text())
     results: list[dict] = []
     for c in cases:
-        result = _evaluate_case(c, model=model)
+        result = _evaluate_case(c, model=model, use_cache=use_cache)
         results.append(result)
         if on_case_done is not None:
             on_case_done(result)
@@ -267,7 +269,8 @@ def run(path: Path = DATASET_PATH,
 
 def run_with_progress(path: Path = DATASET_PATH,
                       console: Console | None = None,
-                      model: str = DEFAULT_MODEL) -> list[dict]:
+                      model: str = DEFAULT_MODEL,
+                      use_cache: bool = True) -> list[dict]:
     """Run() with a live Rich progress bar showing per-case status."""
     console = console or Console()
     cases = json.loads(Path(path).read_text())
@@ -290,7 +293,7 @@ def run_with_progress(path: Path = DATASET_PATH,
         task = progress.add_task("[bold]Eval[/]", total=len(cases))
         for c in cases:
             progress.update(task, description=f"[bold]Eval[/] • {c['q'][:40]}")
-            result = _evaluate_case(c)
+            result = _evaluate_case(c, model=model, use_cache=use_cache)
             results.append(result)
             if result.get("passed"):
                 pass_count += 1

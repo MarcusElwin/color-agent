@@ -62,7 +62,8 @@ def test_cli_fast_flag_overrides_model(monkeypatch):
     """--fast must route to claude-haiku-4-5 even if --model is also passed."""
     captured: dict = {}
 
-    def fake_to_hex(query, k=5, force=None, model="x", on_progress=None):
+    def fake_to_hex(query, k=5, force=None, model="x", on_progress=None,
+                     use_cache=True):
         captured["model"] = model
         from color_agent.types import Candidate, Result
         return Result(query, query, [Candidate("#000000", "x", 1.0, "css")],
