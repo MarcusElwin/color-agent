@@ -214,10 +214,12 @@ def to_candidates(payload: dict[str, Any], k: int = 5) -> list[Candidate]:
     out: list[Candidate] = []
     for c in cands_in[:max(k, 5)]:
         score = CONFIDENCE_TO_SCORE.get(c.get("confidence", "medium"), 0.7)
+        rationale = c.get("rationale")
         out.append(Candidate(
             hex=c["hex"].upper(),
             name=c.get("name", ""),
             score=score,
             source=f"llm_{payload.get('source', 'knowledge')}",
+            rationale=rationale.strip() if isinstance(rationale, str) else None,
         ))
     return out

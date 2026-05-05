@@ -58,3 +58,12 @@ def test_medoid_wins_against_outlier():
     sampler = make_sampler(["#0047AB", "#0048AC", "#0046AA", "#0047AB", "#FF0000"])
     cands, _ = consistent("cobalt blue", n=5, sampler=sampler, k=5)
     assert cands[0].hex != "#FF0000"
+
+
+def test_consistent_preserves_rationale():
+    """Rationale from each sample's top-pick should survive into the merged
+    candidate list."""
+    sampler = make_sampler(["#0047AB", "#0050B0", "#0046AA", "#0048AC", "#0049AD"])
+    cands, _ = consistent("cobalt blue", n=5, sampler=sampler, k=5)
+    # The fixture sets rationale="p" on every candidate
+    assert all(c.rationale == "p" for c in cands)

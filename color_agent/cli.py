@@ -164,6 +164,8 @@ def _render_human(result, console: Console) -> None:
         console.print("[red](no candidates)[/red]")
         return
 
+    has_rationale = any(c.rationale for c in result.candidates)
+
     table = Table(box=ROUNDED, show_lines=False, expand=False,
                   border_style="grey50", header_style="bold white on grey23")
     table.add_column("#", justify="right", style="dim", width=2)
@@ -171,16 +173,22 @@ def _render_human(result, console: Console) -> None:
     table.add_column("score", no_wrap=True)
     table.add_column("name", overflow="fold", max_width=32)
     table.add_column("source", style="dim")
+    if has_rationale:
+        table.add_column("reasoning", overflow="fold", max_width=48,
+                          style="italic")
 
     for i, c in enumerate(result.candidates, 1):
         rank_style = "bold white on green" if i == 1 else "white"
-        table.add_row(
+        row = [
             Text(str(i), style=rank_style),
             _swatch_text(c.hex),
             _score_bar(c.score),
             c.name or "—",
             c.source,
-        )
+        ]
+        if has_rationale:
+            row.append(c.rationale or "—")
+        table.add_row(*row)
 
     console.print(table)
 
@@ -220,6 +228,8 @@ def _render_plain(result) -> str:
         lines.append(
             f"  {i:<2} {c.hex:<8} {c.score:<6.3f} {c.name[:30]:<30} {c.source}"
         )
+        if c.rationale:
+            lines.append(f"     ↳ {c.rationale}")
     return "\n".join(lines)
 
 

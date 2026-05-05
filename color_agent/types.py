@@ -19,6 +19,9 @@ class Candidate:
     name: str
     score: float
     source: str
+    # LLM tiers populate this with the model's per-candidate justification
+    # (Tier 4 base / reflect / consistent). Other tiers leave it None.
+    rationale: str | None = None
 
 
 @dataclass
